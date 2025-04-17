@@ -12,6 +12,7 @@ import safetensors.torch as sf
 import numpy as np
 import argparse
 import math
+import socket
 
 from PIL import Image
 from diffusers import AutoencoderKLHunyuanVideo
@@ -27,11 +28,20 @@ from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 
+def is_port_available(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) != 0
+
+def get_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
-parser.add_argument("--port", type=int, default=7860)
+parser.add_argument("--port", type=int, default=get_free_port())
 args = parser.parse_args()
 
 print(args)
