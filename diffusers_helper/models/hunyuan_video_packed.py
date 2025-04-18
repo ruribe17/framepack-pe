@@ -18,7 +18,6 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers_helper.dit_common import LayerNorm
 from diffusers_helper.utils import zero_module
 
-
 enabled_backends = []
 
 if torch.cuda.is_available():
@@ -106,6 +105,30 @@ def apply_rotary_emb_transposed(x, freqs_cis):
     out = out.to(x)
     return out
 
+def chunked_attention_bfloat16(q, k, v, chunk_size=64):
+    B, H, T_q, D = q.shape
+    T_kv = k.shape[2]
+    output_chunks = []
+
+    for start in range(0, T_q, chunk_size):
+        end = min(start + chunk_size, T_q)
+        q_chunk = q[:, :, start:end, :]
+
+        attn_scores = torch.matmul(q_chunk, k.transpose(-2, -1)) / (D ** 0.5)
+        attn_probs = torch.softmax(attn_scores.float(), dim=-1).to(torch.bfloat16)  # force softmax to fp32, then back
+        attn_out = torch.matmul(attn_probs, v)
+
+        output_chunks.append(attn_out)
+
+    return torch.cat(output_chunks, dim=2)
+
+def mps_attn_varlen_func(q, k, v, chunk_size=128):
+    return chunked_attention_bfloat16(
+        q.transpose(1, 2),
+        k.transpose(1, 2),
+        v.transpose(1, 2),
+        chunk_size=chunk_size
+    ).transpose(1, 2)
 
 def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv):
     if cu_seqlens_q is None and cu_seqlens_kv is None and max_seqlen_q is None and max_seqlen_kv is None:
@@ -121,7 +144,7 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
             x = xformers_attn_func(q, k, v)
             return x
 
-        x = torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
+        x = mps_attn_varlen_func(q, k, v, chunk_size=64) if torch.backends.mps.is_available() else torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
         return x
 
     batch_size = q.shape[0]
@@ -171,7 +194,7 @@ class HunyuanAttnProcessorFlashAttnDouble:
         key = torch.cat([key, encoder_key], dim=1)
         value = torch.cat([value, encoder_value], dim=1)
 
-        hidden_states = attn_varlen_func(query, key, value, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv)
+        hidden_states = mps_attn_varlen_func(query, key, value, chunk_size=64) if torch.backends.mps.is_available() else attn_varlen_func(query, key, value, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv)
         hidden_states = hidden_states.flatten(-2)
 
         txt_length = encoder_hidden_states.shape[1]
