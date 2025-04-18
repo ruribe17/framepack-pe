@@ -2,6 +2,9 @@ import os
 import torch
 import argparse
 
+# 设置MPS回退环境变量，以处理未实现的操作
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
 from diffusers_helper.memory import get_mps_free_memory_gb, mps
 

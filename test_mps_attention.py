@@ -1,6 +1,11 @@
+import os
 import torch
 import numpy as np
 import time
+
+# 设置MPS回退环境变量，以处理未实现的操作
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 from diffusers_helper.memory import get_mps_free_memory_gb, mps
 from diffusers_helper.models.hunyuan_video_packed import chunked_attention_bfloat16, mps_attn_varlen_func
 

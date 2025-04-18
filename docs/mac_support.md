@@ -64,6 +64,20 @@ If you encounter issues:
 1. **Memory Errors**: Reduce batch size or model size.
 2. **Performance Issues**: Try disabling TeaCache with `transformer.initialize_teacache(enable_teacache=False)`.
 3. **Compatibility Issues**: Ensure you're using the latest version of PyTorch with MPS support.
+4. **Missing Operator Errors**: If you see errors like `NotImplementedError: The operator 'aten::xxx' is not currently implemented for the MPS device`, set the environment variable `PYTORCH_ENABLE_MPS_FALLBACK=1` before running the script:
+
+   ```bash
+   export PYTORCH_ENABLE_MPS_FALLBACK=1
+   python demo_gradio.py
+   ```
+
+   Or use the provided convenience script:
+
+   ```bash
+   ./run_demo.sh
+   ```
+
+   This will make PyTorch fall back to CPU for operations not yet implemented on MPS.
 
 ## Contributing
 
