@@ -6,7 +6,6 @@ os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.di
 
 import gradio as gr
 import torch
-
 import traceback
 import einops
 import safetensors.torch as sf
@@ -140,7 +139,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
 
-        input_image_pt = torch.from_numpy(input_image_np.astype(np.float32)) / 127.5 - 1
+        input_image_pt = torch.from_numpy(input_image_np).float() / 127.5 - 1
         input_image_pt = input_image_pt.permute(2, 0, 1)[None, :, None]
 
         # VAE encoding
@@ -148,7 +147,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
 
         if not high_vram:
-            load_model_as_complete(vae, target_device='mps' if 'mps' in Tensor.get_devices() else 'gpu')
+            load_model_as_complete(vae, target_device=mps if torch.backends.mps.is_available() else gpu)
 
         start_latent = vae_encode(input_image_pt, vae)
 
@@ -157,7 +156,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
 
         if not high_vram:
-            load_model_as_complete(image_encoder, target_device='mps' if 'mps' in Tensor.get_devices() else 'gpu')
+            load_model_as_complete(image_encoder, target_device=mps if torch.backends.mps.is_available() else gpu)
 
         image_encoder_output = hf_clip_vision_encode(input_image_np, feature_extractor, image_encoder)
         image_encoder_last_hidden_state = image_encoder_output.last_hidden_state
@@ -177,7 +176,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         rnd = torch.Generator("cpu").manual_seed(seed)
         num_frames = latent_window_size * 4 - 3
 
-        history_latents = torch.zeros((1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
+        history_latents = torch.zeros(size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
         history_pixels = None
         total_generated_latent_frames = 0
 

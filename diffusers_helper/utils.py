@@ -3,13 +3,13 @@ import cv2
 import json
 import random
 import glob
-# import torch  # Replaced by tinygrad
+import torch
 import einops
 import numpy as np
 import datetime
-# # import torch  # Replaced by tinygradvision  # Not used with tinygrad
+import torchvision
 
-# import safetensors.torch as sf  # Not supported in tinygrad
+import safetensors.torch as sf
 from PIL import Image
 
 

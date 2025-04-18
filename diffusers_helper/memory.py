@@ -1,7 +1,6 @@
 # By lllyasviel
 
 import torch
-from torch import Tensor
 
 
 # Device management
