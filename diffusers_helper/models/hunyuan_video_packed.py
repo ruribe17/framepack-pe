@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import einops
 import numpy as np
 
@@ -61,6 +62,37 @@ except:
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
+class AvgPool3dMPS(nn.Module):
+    def __init__(self, kernel_size, stride=None, padding=0):
+        super().__init__()
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, kernel_size, kernel_size)
+        self.kernel_size = kernel_size
+        self.stride = stride or kernel_size
+        self.padding = padding
+
+        # register a buffer that holds the kernel shape only
+        self.register_buffer("ones_kernel", None, persistent=False)
+
+    def forward(self, x):
+        B, C, D, H, W = x.shape
+        kD, kH, kW = self.kernel_size
+        kernel_shape = (C, 1, kD, kH, kW)
+
+        # lazily initialize or resize if needed
+        if (self.ones_kernel is None or self.ones_kernel.shape != kernel_shape or self.ones_kernel.device != x.device):
+            kernel = torch.ones(kernel_shape, dtype=x.dtype, device=x.device) / (kD * kH * kW)
+            self.ones_kernel = kernel
+        else:
+            kernel = self.ones_kernel
+
+        return F.conv3d(
+            x, kernel, bias=None,
+            stride=self.stride,
+            padding=self.padding,
+            groups=C
+        )
+
 
 def pad_for_3d_conv(x, kernel_size):
     b, c, t, h, w = x.shape
@@ -77,7 +109,7 @@ def center_down_sample_3d(x, kernel_size):
     # xp = einops.rearrange(x, 'b c (t pt) (h ph) (w pw) -> (pt ph pw) b c t h w', pt=pt, ph=ph, pw=pw)
     # xc = xp[cp]
     # return xc
-    return torch.nn.functional.avg_pool3d(x, kernel_size, stride=kernel_size)
+    return AvgPool3dMPS(kernel_size, stride=kernel_size)(x) if torch.backends.mps.is_available() else torch.nn.functional.avg_pool3d(x, kernel_size, stride=kernel_size)
 
 
 def get_cu_seqlens(text_mask, img_len):
