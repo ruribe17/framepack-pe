@@ -3,13 +3,13 @@ import cv2
 import json
 import random
 import glob
-import torch
+# import torch  # Replaced by tinygrad
 import einops
 import numpy as np
 import datetime
-import torchvision
+# # import torch  # Replaced by tinygradvision  # Not used with tinygrad
 
-import safetensors.torch as sf
+# import safetensors.torch as sf  # Not supported in tinygrad
 from PIL import Image
 
 
@@ -318,12 +318,20 @@ def add_tensors_with_padding(tensor1, tensor2):
 
 
 def print_free_mem():
-    torch.cuda.empty_cache()
-    free_mem, total_mem = torch.cuda.mem_get_info(0)
-    free_mem_mb = free_mem / (1024 ** 2)
-    total_mem_mb = total_mem / (1024 ** 2)
-    print(f"Free memory: {free_mem_mb:.2f} MB")
-    print(f"Total memory: {total_mem_mb:.2f} MB")
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        free_mem, total_mem = torch.cuda.mem_get_info(0)
+        free_mem_mb = free_mem / (1024 ** 2)
+        total_mem_mb = total_mem / (1024 ** 2)
+        print(f"Free memory: {free_mem_mb:.2f} MB")
+        print(f"Total memory: {total_mem_mb:.2f} MB")
+    
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+        free_mem_mb = (torch.mps.recommended_max_memory() - torch.mps.driver_allocated_memory()) / (1024 ** 2)
+        total_mem_mb = torch.mps.recommended_max_memory() / (1024 ** 2)
+        print(f"Free memory: {free_mem_mb:.2f} MB")
+        print(f"Total memory: {total_mem_mb:.2f} MB")
     return
 
 

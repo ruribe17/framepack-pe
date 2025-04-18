@@ -1,0 +1,220 @@
+{
+    "torch.manual_seed": {
+      "tinygrad": "Tensor.manual_seed",
+      "notes": "Sets the seed for random number generation, equivalent to tinygrad's Tensor.manual_seed (for reproducibility)."
+    },
+    "torch.tensor": {
+      "tinygrad": "Tensor(...)",
+      "notes": "Use tinygrad's Tensor constructor to create a tensor from data (e.g., Tensor(data))."
+    },
+    "torch.zeros": {
+      "tinygrad": "Tensor.zeros",
+      "notes": "Creates a tensor filled with zeros (pass the shape arguments similarly)."
+    },
+    "torch.ones": {
+      "tinygrad": "Tensor.ones",
+      "notes": "Creates a tensor filled with ones (same shape syntax)."
+    },
+    "torch.full": {
+      "tinygrad": "Tensor.full",
+      "notes": "Creates a tensor filled with a given scalar value (Tensor.full(shape, value))."
+    },
+    "torch.arange": {
+      "tinygrad": "Tensor.arange",
+      "notes": "Creates a 1D tensor with a range of values (similar signature for start, end, step)."
+    },
+    "torch.linspace": {
+      "tinygrad": "Tensor.linspace",
+      "notes": "Creates a 1D tensor with linearly spaced values between a start and end."
+    },
+    "torch.eye": {
+      "tinygrad": "Tensor.eye",
+      "notes": "Creates an identity matrix (2D tensor) of given size."
+    },
+    "torch.rand": {
+      "tinygrad": "Tensor.rand",
+      "notes": "Creates a tensor with uniform random values in [0,1)."
+    },
+    "torch.randn": {
+      "tinygrad": "Tensor.randn",
+      "notes": "Creates a tensor with random values from a standard normal distribution."
+    },
+    "torch.randint": {
+      "tinygrad": "Tensor.randint",
+      "notes": "Creates a tensor with random integer values (given low, high range and shape)."
+    },
+    "torch.add": {
+      "tinygrad": "Tensor.add",
+      "notes": "Element-wise addition of two tensors (or tensor and scalar). In tinygrad you can also use the + operator (Tensor.__add__)."
+    },
+    "torch.sub": {
+      "tinygrad": "Tensor.sub",
+      "notes": "Element-wise subtraction. Also available via the - operator."
+    },
+    "torch.mul": {
+      "tinygrad": "Tensor.mul",
+      "notes": "Element-wise multiplication. Also available via the * operator."
+    },
+    "torch.div": {
+      "tinygrad": "Tensor.div",
+      "notes": "Element-wise division. Also available via the / operator."
+    },
+    "torch.pow": {
+      "tinygrad": "Tensor.pow",
+      "notes": "Element-wise power/exponentiation. Equivalent to the ** operator in tinygrad."
+    },
+    "torch.sum": {
+      "tinygrad": "Tensor.sum",
+      "notes": "Sum of tensor elements. Accepts an axis/axes (dim) argument similar to PyTorch."
+    },
+    "torch.mean": {
+      "tinygrad": "Tensor.mean",
+      "notes": "Mean of tensor elements. Accepts axis (dim) argument if needed."
+    },
+    "torch.matmul": {
+      "tinygrad": "Tensor.matmul",
+      "notes": "Matrix multiplication for 2D (or higher-dim batch) tensors. Use x.matmul(y) in tinygrad."
+    },
+    "torch.mm": {
+      "tinygrad": "Tensor.matmul",
+      "notes": "Matrix multiplication for 2D tensors (alias of matmul). Use Tensor.matmul for equivalent effect."
+    },
+    "torch.bmm": {
+      "tinygrad": "Tensor.matmul",
+      "notes": "Batch matrix-multiplication for 3D tensors. Use Tensor.matmul (it supports batch dimensions similarly)."
+    },
+    "torch.nn.Module": {
+      "tinygrad": "(no base class)",
+      "notes": "tinygrad has no nn.Module base; use a regular Python class. Implement __call__ instead of forward for the forward pass."
+    },
+    "torch.nn.Parameter": {
+      "tinygrad": "(not needed)",
+      "notes": "tinygrad uses raw Tensor for parameters. Just create a Tensor (with requires_grad=True if needed)."
+    },
+    "torch.nn.Conv1d": {
+      "tinygrad": "tinygrad.nn.Conv1d",
+      "notes": "1D convolution layer. tinygrad.nn.Conv1d has an interface similar to PyTorch (returns a Conv2d internally, but usage is the same)."
+    },
+    "torch.nn.Conv2d": {
+      "tinygrad": "tinygrad.nn.Conv2d",
+      "notes": "2D convolution layer. Same constructor signature and usage (call instance on input tensor) as PyTorch Conv2d."
+    },
+    "torch.nn.Conv3d": {
+      "tinygrad": "(not available)",
+      "notes": "No built-in Conv3d in tinygrad as of now; 3D conv must be implemented manually (e.g., via multiple Conv2d or by extending tinygrad)."
+    },
+    "torch.nn.ConvTranspose1d": {
+      "tinygrad": "tinygrad.nn.ConvTranspose1d",
+      "notes": "1D transposed convolution (deconvolution). Use tinygrad.nn.ConvTranspose1d (calls into ConvTranspose2d internally for tinygrad)."
+    },
+    "torch.nn.ConvTranspose2d": {
+      "tinygrad": "tinygrad.nn.ConvTranspose2d",
+      "notes": "2D transposed convolution. Equivalent class exists in tinygrad with similar usage."
+    },
+    "torch.nn.Linear": {
+      "tinygrad": "tinygrad.nn.Linear",
+      "notes": "Fully-connected layer. Same constructor (in_features, out_features) and call semantics. Weights and bias are Tensors in tinygrad."
+    },
+    "torch.nn.LayerNorm": {
+        "tinygrad": "tinygrad.nn.LayerNorm"
+    }
+    "torch.nn.BatchNorm1d": {
+      "tinygrad": "tinygrad.nn.BatchNorm",
+      "notes": "Batch Normalization for 1D (feature vectors). Use tinygrad.nn.BatchNorm (specify num features). Same class covers 1D/2D/3D normalization."
+    },
+    "torch.nn.BatchNorm2d": {
+      "tinygrad": "tinygrad.nn.BatchNorm",
+      "notes": "Batch Normalization for 2D (image channels). tinygrad.nn.BatchNorm with num_features matches PyTorch's BatchNorm2d."
+    },
+    "torch.nn.BatchNorm3d": {
+      "tinygrad": "tinygrad.nn.BatchNorm",
+      "notes": "Batch Normalization for 3D. Use the same tinygrad.nn.BatchNorm (with num_features)."
+    },
+    "torch.nn.ReLU": {
+      "tinygrad": "(no class)",
+      "notes": "Use Tensor.relu() method for ReLU activation in tinygrad (no nn.ReLU class needed)."
+    },
+    "torch.nn.Sigmoid": {
+      "tinygrad": "(no class)",
+      "notes": "Use Tensor.sigmoid() for Sigmoid activation (no separate module class in tinygrad)."
+    },
+    "torch.nn.Tanh": {
+      "tinygrad": "(no class)",
+      "notes": "Use Tensor.tanh() for Tanh activation (no separate module needed)."
+    },
+    "torch.nn.LeakyReLU": {
+      "tinygrad": "(no class)",
+      "notes": "Use Tensor.leaky_relu(neg_slope) for LeakyReLU activation. (No stateful class; specify neg_slope if needed when calling method.)"
+    },
+    "torch.nn.Dropout": {
+      "tinygrad": "(no class)",
+      "notes": "Use Tensor.dropout(p) method on the tensor. Note: dropout is applied only if Tensor.training is True (simulating training mode)."
+    },
+    "torch.nn.functional.relu": {
+      "tinygrad": "Tensor.relu",
+      "notes": "ReLU activation. In tinygrad, call x.relu() on the tensor."
+    },
+    "torch.nn.functional.leaky_relu": {
+      "tinygrad": "Tensor.leaky_relu",
+      "notes": "Leaky ReLU activation. Use x.leaky_relu(neg_slope) on the tensor."
+    },
+    "torch.nn.functional.sigmoid": {
+      "tinygrad": "Tensor.sigmoid",
+      "notes": "Sigmoid activation. Use x.sigmoid()."
+    },
+    "torch.nn.functional.tanh": {
+      "tinygrad": "Tensor.tanh",
+      "notes": "Tanh activation. Use x.tanh()."
+    },
+    "torch.nn.functional.softmax": {
+      "tinygrad": "Tensor.softmax",
+      "notes": "Softmax activation. Use x.softmax(axis=dim) on the tensor (defaults to last axis if not specified)."
+    },
+    "torch.nn.functional.log_softmax": {
+      "tinygrad": "Tensor.log_softmax",
+      "notes": "Log-Softmax. Use x.log_softmax(axis=dim) on the tensor."
+    },
+    "torch.nn.functional.linear": {
+      "tinygrad": "Tensor.linear",
+      "tinygrad_chain": "x.matmul(weight.T) + bias",
+      "notes": "Linear function (xW^T + b). tinygrad provides Tensor.linear(x, weight, bias) method, expecting weight transposed relative to PyTorch's, or equivalently do x.matmul(weight.T) + bias."
+    },
+    "torch.nn.functional.dropout": {
+      "tinygrad": "Tensor.dropout",
+      "notes": "Dropout function. Use x.dropout(p) (effective when Tensor.training is True)."
+    },
+    "torch.nn.functional.cross_entropy": {
+      "tinygrad": "Tensor.sparse_categorical_crossentropy",
+      "tinygrad_chain": "logits.log_softmax().mul(one_hot(target)).mean().neg()",
+      "notes": "Cross-entropy loss. tinygrad can compute this via Tensor.sparse_categorical_crossentropy(target) or by applying log_softmax to logits and computing the negative log-likelihood for the target classes."
+    },
+    "torch.nn.functional.mse_loss": {
+      "tinygrad": "(no direct function)",
+      "tinygrad_chain": "(pred - target).square().mean()",
+      "notes": "Mean squared error loss. Compute by taking the elementwise difference, squaring it, and taking the mean (no built-in tinygrad function needed)."
+    },
+    "torch.optim.SGD": {
+      "tinygrad": "tinygrad.nn.optim.SGD",
+      "notes": "Stochastic Gradient Descent optimizer. Usage: opt = tinygrad.nn.optim.SGD(params, lr, momentum, etc.). The returned optimizer has zero_grad() and step() methods similar to PyTorch."
+    },
+    "torch.optim.Adam": {
+      "tinygrad": "tinygrad.nn.optim.Adam",
+      "notes": "Adam optimizer. Use tinygrad.nn.optim.Adam(params, lr, beta1, beta2, etc.) similarly to torch.optim.Adam."
+    },
+    "torch.optim.AdamW": {
+      "tinygrad": "tinygrad.nn.optim.AdamW",
+      "notes": "AdamW optimizer. Use tinygrad.nn.optim.AdamW with similar parameters (weight decay, etc.)."
+    },
+    "torch.optim.RMSprop": {
+      "tinygrad": "tinygrad.nn.optim.RMSprop",
+      "notes": "RMSprop optimizer. Use tinygrad.nn.optim.RMSprop(params, lr, etc.) if available (tinygrad includes RMSprop)."
+    },
+    "torch.nn.CrossEntropyLoss": {
+      "tinygrad": "(no class)",
+      "notes": "Use tinygrad's functional approach: apply log_softmax to logits and compute the loss, or use Tensor.sparse_categorical_crossentropy for a combined operation."
+    },
+    "torch.nn.MSELoss": {
+      "tinygrad": "(no class)",
+      "notes": "No class in tinygrad; compute MSE directly (e.g., (pred - target).square().mean())."
+    }
+}

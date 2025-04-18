@@ -1,8 +1,9 @@
+from tkinter import W
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
-import einops
 import torch.nn as nn
+import einops
 import numpy as np
 
 from diffusers.loaders import FromOriginalModelMixin
@@ -20,14 +21,15 @@ from diffusers_helper.utils import zero_module
 
 enabled_backends = []
 
-if torch.backends.cuda.flash_sdp_enabled():
-    enabled_backends.append("flash")
-if torch.backends.cuda.math_sdp_enabled():
-    enabled_backends.append("math")
-if torch.backends.cuda.mem_efficient_sdp_enabled():
-    enabled_backends.append("mem_efficient")
-if torch.backends.cuda.cudnn_sdp_enabled():
-    enabled_backends.append("cudnn")
+if torch.cuda.is_available():
+    if torch.backends.cuda.flash_sdp_enabled():
+        enabled_backends.append("flash")
+    if torch.backends.cuda.math_sdp_enabled():
+        enabled_backends.append("math")
+    if torch.backends.cuda.mem_efficient_sdp_enabled():
+        enabled_backends.append("mem_efficient")
+    if torch.backends.cuda.cudnn_sdp_enabled():
+        enabled_backends.append("cudnn")
 
 print("Currently enabled native sdp backends:", enabled_backends)
 
