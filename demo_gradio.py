@@ -5,9 +5,11 @@ import os
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 
 import gradio as gr
+import torch
 
 import traceback
 import einops
+import safetensors.torch as sf
 import numpy as np
 import argparse
 import math
@@ -41,30 +43,41 @@ high_vram = free_mem_gb > 60
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
 
-# Model loading will need to be adapted to tinygrad. Placeholder for text_encoder, text_encoder_2, vae, etc.
-text_encoder = None  # TODO: Implement or port to tinygrad
-text_encoder_2 = None
-vae = None
-tokenizer = None
-tokenizer_2 = None
+text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
+text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder_2', torch_dtype=torch.float16).cpu()
+tokenizer = LlamaTokenizerFast.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer')
+tokenizer_2 = CLIPTokenizer.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer_2')
+vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
 
-feature_extractor = None  # TODO: Port or wrap for tinygrad
-image_encoder = None
+feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
+image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
 
-transformer = None  # TODO: Port or wrap for tinygrad
+transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePackI2V_HY', torch_dtype=torch.bfloat16).cpu()
 
-# .eval() is torch-specific, not needed in tinygrad
+vae.eval()
+text_encoder.eval()
+text_encoder_2.eval()
+image_encoder.eval()
+transformer.eval()
 
 if not high_vram:
     vae.enable_slicing()
     vae.enable_tiling()
 
-transformer.high_quality_fp32_output_for_inference = False
-print('transformer.high_quality_fp32_output_for_inference = False')
+transformer.high_quality_fp32_output_for_inference = True
+print('transformer.high_quality_fp32_output_for_inference = True')
 
-# .to(dtype=...) is torch-specific, not needed in tinygrad
+transformer.to(dtype=torch.bfloat16)
+vae.to(dtype=torch.float16)
+image_encoder.to(dtype=torch.float16)
+text_encoder.to(dtype=torch.float16)
+text_encoder_2.to(dtype=torch.float16)
 
-# .requires_grad_(False) is torch-specific, not needed in tinygrad
+vae.requires_grad_(False)
+text_encoder.requires_grad_(False)
+text_encoder_2.requires_grad_(False)
+image_encoder.requires_grad_(False)
+transformer.requires_grad_(False)
 
 if not high_vram:
     # DynamicSwapInstaller is same as huggingface's enable_sequential_offload but 3x faster
@@ -83,7 +96,7 @@ outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
 
-# No gradient context needed in tinygrad
+@torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache):
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
@@ -110,7 +123,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         llama_vec, clip_l_pooler = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
 
         if cfg == 1:
-            llama_vec_n, clip_l_pooler_n = Tensor.zeros(llama_vec.shape), Tensor.zeros(clip_l_pooler.shape)
+            llama_vec_n, clip_l_pooler_n = torch.zeros_like(llama_vec), torch.zeros_like(clip_l_pooler)
         else:
             llama_vec_n, clip_l_pooler_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
 
@@ -127,7 +140,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
 
-        input_image_pt = Tensor(input_image_np.astype(np.float32)) / 127.5 - 1
+        input_image_pt = torch.from_numpy(input_image_np.astype(np.float32)) / 127.5 - 1
         input_image_pt = input_image_pt.permute(2, 0, 1)[None, :, None]
 
         # VAE encoding
@@ -151,17 +164,20 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         # Dtype
 
-        # .to(dtype=...) is torch-specific, not needed in tinygrad
+        llama_vec = llama_vec.to(transformer.dtype)
+        llama_vec_n = llama_vec_n.to(transformer.dtype)
+        clip_l_pooler = clip_l_pooler.to(transformer.dtype)
+        clip_l_pooler_n = clip_l_pooler_n.to(transformer.dtype)
+        image_encoder_last_hidden_state = image_encoder_last_hidden_state.to(transformer.dtype)
 
         # Sampling
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
 
-        Tensor.manual_seed(seed)
-        rnd = None  # TODO: Replace torch.Generator with tinygrad equivalent if needed
+        rnd = torch.Generator("cpu").manual_seed(seed)
         num_frames = latent_window_size * 4 - 3
 
-        history_latents = Tensor.zeros((1, 16, 1 + 2 + 16, height // 8, width // 8))
+        history_latents = torch.zeros((1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
         history_pixels = None
         total_generated_latent_frames = 0
 
@@ -184,17 +200,17 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             print(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
 
-            indices = Tensor.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
+            indices = torch.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
             clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
-            clean_latent_indices = Tensor.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
+            clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
 
-            clean_latents_pre = start_latent  # .to() not needed
+            clean_latents_pre = start_latent.to(history_latents)
             clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
-            clean_latents = Tensor.cat([clean_latents_pre, clean_latents_post], dim=2)
+            clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
 
             if not high_vram:
                 unload_complete_models()
-                move_model_to_device_with_memory_preservation(transformer, target_device='mps' if 'mps' in Tensor.get_devices() else 'gpu', preserved_memory_gb=gpu_memory_preservation)
+                move_model_to_device_with_memory_preservation(transformer, target_device=mps if torch.backends.mps.is_available() else gpu, preserved_memory_gb=gpu_memory_preservation)
 
             if use_teacache:
                 transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
@@ -237,8 +253,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 negative_prompt_embeds=llama_vec_n,
                 negative_prompt_embeds_mask=llama_attention_mask_n,
                 negative_prompt_poolers=clip_l_pooler_n,
-                device='mps' if 'mps' in Tensor.get_devices() else 'gpu',
-                dtype='float16',
+                device=mps if torch.backends.mps.is_available() else gpu,
+                dtype=torch.bfloat16,
                 image_embeddings=image_encoder_last_hidden_state,
                 latent_indices=latent_indices,
                 clean_latents=clean_latents,
@@ -251,24 +267,24 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             )
 
             if is_last_section:
-                generated_latents = Tensor.cat([start_latent, generated_latents], dim=2)
+                generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
 
             total_generated_latent_frames += int(generated_latents.shape[2])
-            history_latents = Tensor.cat([generated_latents, history_latents], dim=2)
+            history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
 
             if not high_vram:
-                offload_model_from_device_for_memory_preservation(transformer, target_device='mps' if 'mps' in Tensor.get_devices() else 'gpu', preserved_memory_gb=8)
-                load_model_as_complete(vae, target_device='mps' if 'mps' in Tensor.get_devices() else 'gpu')
+                offload_model_from_device_for_memory_preservation(transformer, target_device=mps if torch.backends.mps.is_available() else gpu, preserved_memory_gb=8)
+                load_model_as_complete(vae, target_device=gpu)
 
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
 
             if history_pixels is None:
-                history_pixels = vae_decode(real_history_latents, vae)  # .cpu() not needed
+                history_pixels = vae_decode(real_history_latents, vae).cpu()
             else:
                 section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
                 overlapped_frames = latent_window_size * 4 - 3
 
-                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae)  # .cpu() not needed
+                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
                 history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
 
             if not high_vram:
@@ -284,7 +300,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             if is_last_section:
                 break
-    except Exception as e:
+    except:
         traceback.print_exc()
 
         if not high_vram:
@@ -292,8 +308,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 text_encoder, text_encoder_2, image_encoder, vae, transformer
             )
 
-    finally:
-        stream.output_queue.push(('end', None))
+    stream.output_queue.push(('end', None))
     return
 
 
@@ -377,13 +392,8 @@ with block:
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
-try:
-    block.launch(
-        server_name=args.server,
-        server_port=args.port,
-        share=args.share,
-    )
-except Exception as e:
-    print(f"Error launching block: {e}")
-finally:
-    print("Block launch complete.")
+block.launch(
+    server_name=args.server,
+    server_port=args.port,
+    share=args.share,
+)
