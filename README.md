@@ -71,7 +71,7 @@ For example, to install sage-attention (linux):
 
 However, you are highly recommended to first try without sage-attention since it will influence results, though the influence is minimal.
 
-** Docker **
+**Docker**:
 
 NVIDIA Container Toolkit is needed to run cuda in the container
 
