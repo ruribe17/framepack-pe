@@ -40,7 +40,7 @@ from diffusers_helper.bucket_tools import find_nearest_bucket
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
-parser.add_argument("--server", type=str, default='0.0.0.0')
+parser.add_argument("--server", type=str, default='127.0.0.1')
 parser.add_argument("--port", type=int, required=False)
 parser.add_argument("--inbrowser", action='store_true')
 args = parser.parse_args()
@@ -106,6 +106,12 @@ else:
     image_encoder.to(gpu)
     vae.to(gpu)
     transformer.to(gpu)
+
+def quit_application():
+    print("Save and Quit requested...")
+    autosave_queue_on_exit(global_state_for_autosave)
+    import signal
+    os.kill(os.getpid(), signal.SIGINT)
 
 def np_to_base64_uri(np_array, format="png"):
     if np_array is None:
@@ -950,6 +956,7 @@ with block:
                 save_queue_btn = gr.DownloadButton("Save Queue", size="sm")
                 load_queue_btn = gr.UploadButton("Load Queue", file_types=[".zip"], size="sm")
                 clear_queue_btn = gr.Button("Clear Queue", size="sm", variant="stop")
+                quit_button = gr.Button("Save and Quit", size="sm", variant="secondary")
 
             gr.Markdown("## Current Task Progress")
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
@@ -973,6 +980,12 @@ with block:
         fn=process_queue,
         inputs=[state],
         outputs=[state, queue_df, result_video, preview_image, progress_desc, progress_bar, add_button, abort_button]
+    )
+
+    quit_button.click(
+         fn=quit_application,
+         inputs=[],
+         outputs=[]
     )
 
     abort_button.click(fn=abort_processing, inputs=[state], outputs=[state, abort_button])
