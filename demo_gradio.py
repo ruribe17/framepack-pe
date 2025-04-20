@@ -144,6 +144,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         metadata = PngInfo()
         metadata.add_text("prompt", prompt)
+        metadata.add_text("seed", str(seed))
         
         Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'), pnginfo=metadata)
 
