@@ -1,4 +1,3 @@
-from tkinter import W
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -6,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import einops
 import numpy as np
+import math
 
 from diffusers.loaders import FromOriginalModelMixin
 from diffusers.configuration_utils import ConfigMixin, register_to_config
@@ -137,30 +137,87 @@ def apply_rotary_emb_transposed(x, freqs_cis):
     out = out.to(x)
     return out
 
-def chunked_attention_bfloat16(q, k, v, chunk_size=64):
-    B, H, T_q, D = q.shape
-    T_kv = k.shape[2]
-    output_chunks = []
+# Metal per-buffer cap ≈ 2^34 bytes; use half for safety
+_METAL_MAX_BUF = 2**34
+_SAFE_BUF      = _METAL_MAX_BUF // 2
 
-    for start in range(0, T_q, chunk_size):
-        end = min(start + chunk_size, T_q)
-        q_chunk = q[:, :, start:end, :]
+def compute_safe_q_chunk(q2, k2, bytes_per_elem_scratch=6):
+    """
+    Compute the maximal Q-chunk length so that each fused SDP call's scratch
+    (bf16 matmul + fp32 softmax = bytes_per_elem_scratch) fits under SAFE_BUF.
+    """
+    B, Tq, H, D = q2.shape
+    Tk          = k2.shape[1]
+    max_chunk   = _SAFE_BUF // (B * H * Tk * bytes_per_elem_scratch)
+    return max(1, int(max_chunk))
 
-        attn_scores = torch.matmul(q_chunk, k.transpose(-2, -1)) / (D ** 0.5)
-        attn_probs = torch.softmax(attn_scores.float(), dim=-1).to(torch.bfloat16)  # force softmax to fp32, then back
-        attn_out = torch.matmul(attn_probs, v)
+def safe_sdp_attention(q, k, v, *, is_causal=False, dropout_p=0.0, max_chunks=8):
+    """
+    MPS‐safe, chunked scaled_dot_product_attention:
+      • Expects q, k, v in [B, T, H, D]
+      • Transposes to [B, H, T, D] once (contiguous)
+      • Tries fused SDP on full Q; on OOM, retries with 2,4,8 chunks...
+      • Writes directly into pre‐allocated output (no cat)
+      • Returns in original [B, T, H, D]
+    """
+    # 1) Transpose & make contiguous: [B, T, H, D] → [B, H, T, D]
+    q2 = q.transpose(1, 2).contiguous()
+    k2 = k.transpose(1, 2).contiguous()
+    v2 = v.transpose(1, 2).contiguous()
 
-        output_chunks.append(attn_out)
+    B, H, T, D = q2.shape
+    out2 = torch.empty_like(q2)
 
-    return torch.cat(output_chunks, dim=2)
+    # Predict initial number of Q-chunks
+    safe_chunk = compute_safe_q_chunk(q2, k2)     # max tokens per chunk
+    initial_splits = math.ceil(T / safe_chunk)    # splits needed
+    # Build chunk counts list: initial, then *2 until <= max_chunks
+    chunk_counts = []
+    n = initial_splits
+    while n <= max_chunks:
+        chunk_counts.append(n)
+        n *= 2
+    # Ensure max_chunks is included
+    if chunk_counts[-1] != max_chunks:
+        chunk_counts.append(max_chunks)
 
-def mps_attn_varlen_func(q, k, v, chunk_size=128):
-    return chunked_attention_bfloat16(
-        q.transpose(1, 2),
-        k.transpose(1, 2),
-        v.transpose(1, 2),
-        chunk_size=chunk_size
-    ).transpose(1, 2)
+    # Try chunking Q into 1, 2, 4, ..., up to max_chunks
+    for n_chunks in chunk_counts:
+        chunk_size = math.ceil(T / n_chunks)
+        try:
+            print(f"Trying {n_chunks} chunks of size {chunk_size}")
+            for start in range(0, T, chunk_size):
+                end = min(start + chunk_size, T)
+                qc = q2[:, :, start:end, :]  # [B, H, chunk, D]
+                oc = torch.nn.functional.scaled_dot_product_attention(
+                    qc, k2, v2,
+                    is_causal=is_causal,
+                    dropout_p=dropout_p
+                )
+                out2[:, :, start:end, :] = oc
+            # Success; transpose back and return
+            return out2.transpose(1, 2)
+        except RuntimeError:
+            continue  # try smaller chunks
+
+    # If all fused attempts OOM, fall back to naive matmul
+    out = torch.empty_like(q)
+    k_t = k.transpose(-2, -1).contiguous()
+    scale = 1.0 / math.sqrt(D)
+    for start in range(0, T, chunk_size):
+        end = min(start + chunk_size, T)
+        qc = q[:, start:end, :, :]
+        scores = torch.matmul(qc, k_t) * scale
+        probs  = torch.softmax(scores.float(), dim=-1).to(q.dtype)
+        oc     = torch.matmul(probs, v[:, start:end, :, :])
+        out[:, start:end, :, :] = oc
+    return out
+ 
+def mps_attn_varlen_func(q, k, v):
+    return safe_sdp_attention(
+        q, k, v,
+        is_causal=False, dropout_p=0.0
+    )
 
 def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv):
     if cu_seqlens_q is None and cu_seqlens_kv is None and max_seqlen_q is None and max_seqlen_kv is None:
@@ -176,7 +233,7 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
             x = xformers_attn_func(q, k, v)
             return x
 
-        x = mps_attn_varlen_func(q, k, v, chunk_size=64) if torch.backends.mps.is_available() else torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
+        x = mps_attn_varlen_func(q, k, v) if torch.backends.mps.is_available() else torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
         return x
 
     batch_size = q.shape[0]
@@ -226,7 +283,7 @@ class HunyuanAttnProcessorFlashAttnDouble:
         key = torch.cat([key, encoder_key], dim=1)
         value = torch.cat([value, encoder_value], dim=1)
 
-        hidden_states = mps_attn_varlen_func(query, key, value, chunk_size=64) if torch.backends.mps.is_available() else attn_varlen_func(query, key, value, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv)
+        hidden_states = mps_attn_varlen_func(query, key, value) if torch.backends.mps.is_available() else attn_varlen_func(query, key, value, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv)
         hidden_states = hidden_states.flatten(-2)
 
         txt_length = encoder_hidden_states.shape[1]
