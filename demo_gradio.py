@@ -132,7 +132,6 @@ def save_queue():
         file_path = os.path.abspath(QUEUE_FILE)
         with open(file_path, 'w') as f:
             json.dump(jobs, f, indent=2)
-        print(f"Queue saved with {len(jobs)} jobs")
         return True
     except Exception as e:
         print(f"Error saving queue: {str(e)}")
@@ -144,16 +143,13 @@ def load_queue():
         if os.path.exists(QUEUE_FILE):
             with open(QUEUE_FILE, 'r') as f:
                 jobs = json.load(f)
-            print(f"\n=== DEBUG: Loading {len(jobs)} jobs from queue file ===")
             # Clear existing queue and load jobs from file
             job_queue.clear()
             for job_data in jobs:
                 job = QueuedJob.from_dict(job_data)
                 if job is not None:
                     job_queue.append(job)
-            print(f"Successfully loaded {len(job_queue)} jobs into memory")
             return job_queue
-        print("No queue file found, starting with empty queue")
         return []
     except Exception as e:
         print(f"Error loading queue: {str(e)}")
@@ -162,7 +158,6 @@ def load_queue():
 
 # Load existing queue on startup
 job_queue = load_queue()
-print(f"\n=== DEBUG: Initial queue loaded with {len(job_queue)} jobs ===")
 
 def save_image_to_temp(image: np.ndarray, job_id: str) -> str:
     """Save image to temp directory and return the path"""
@@ -224,37 +219,15 @@ def get_next_job():
         traceback.print_exc()
         return None
 
-def delete_job(job_id: str):
-    """Delete a job from the queue and its associated files"""
-    try:
-        # Find and remove the job
-        for job in job_queue:
-            if job.job_id == job_id:
-                # Remove associated files
-                if job.image_path and os.path.exists(job.image_path):
-                    os.remove(job.image_path)
-                if job.thumbnail and os.path.exists(job.thumbnail):
-                    os.remove(job.thumbnail)
-                job_queue.remove(job)
-                save_queue()
-                return update_queue_display(), create_delete_buttons()  # Return both updates
-        return update_queue_display(), create_delete_buttons()  # Return both updates if job not found
-    except Exception as e:
-        print(f"Error deleting job: {str(e)}")
-        traceback.print_exc()
-        return update_queue_display(), create_delete_buttons()  # Return both updates on error
 
 def update_queue_display():
     try:
-        print(f"\n=== DEBUG: Updating queue display with {len(job_queue)} jobs ===")
         queue_data = []
         for job in job_queue:
-            print(f"Processing job {job.job_id} with status {job.status}")
             # Create thumbnail if it doesn't exist
             if not job.thumbnail and job.image_path:
                 try:
-                    print(f"Creating thumbnail for job {job.job_id}")
-                    # Load and resize image
+                    # Load and resize image for thumbnail
                     img = Image.open(job.image_path)
                     width, height = img.size
                     new_height = 200
@@ -270,11 +243,9 @@ def update_queue_display():
 
             # Add job data to display
             if job.thumbnail:
-                print(f"Adding job {job.job_id} to display data")
                 caption = f"Status: {job.status}\nPrompt: {job.prompt[:50]}...\nLength: {job.video_length}s"
                 queue_data.append((job.thumbnail, caption))
         
-        print(f"Returning {len(queue_data)} jobs for display")
         return queue_data
     except Exception as e:
         print(f"Error updating queue display: {str(e)}")
@@ -606,45 +577,22 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
     global stream
     
-    print("\n=== DEBUG: Process Function Start ===")
-    print(f"Input Image: {input_image is not None}")
-    print(f"Prompt: {prompt}")
-    print(f"Seed: {seed}")
-    print(f"Total Second Length: {total_second_length}")
-    print(f"Steps: {steps}")
-    print(f"Queue Status: {len(job_queue)} jobs")
-    print(f"All Jobs Status: {[job.status for job in job_queue]}")
-    print(f"All Jobs Details:")
-    for job in job_queue:
-        print(f"  - ID: {job.job_id}, Status: {job.status}, Path: {job.image_path}")
-    
     # Initialize variables
     output_filename = None
     job_id = None
     
     # Determine which job to process
     if input_image is not None:
-        print("\n=== DEBUG: Checking for just_added jobs ===")
         # Check for just_added jobs first
         just_added_jobs = [job for job in job_queue if job.status == "just_added"]
         if just_added_jobs:
-            print(f"Found {len(just_added_jobs)} just_added jobs, processing the first one")
             next_job = just_added_jobs[0]
-            print(f"\n=== DEBUG: Processing Just Added Job ===")
-            print(f"Job ID: {next_job.job_id}")
-            print(f"Image Path: {next_job.image_path}")
-            print(f"Prompt: {next_job.prompt}")
-            print(f"Status: {next_job.status}")
-            
             next_job.status = "processing"
             save_queue()
             job_id = next_job.job_id
             
             try:
-                print("\n=== DEBUG: Loading Image from Path ===")
-                print(f"Attempting to load image from: {next_job.image_path}")
                 process_image = np.array(Image.open(next_job.image_path))
-                print(f"Image loaded successfully, shape: {process_image.shape}")
             except Exception as e:
                 print(f"ERROR loading image: {str(e)}")
                 traceback.print_exc()
@@ -660,7 +608,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             process_preservation = next_job.gpu_memory_preservation
             process_teacache = next_job.use_teacache
         else:
-            print("\n=== DEBUG: No just_added jobs found, processing input image ===")
             # Process input image
             job_id = add_to_queue(
                 prompt=prompt,
@@ -675,7 +622,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 rs=rs,
                 status="processing"
             )
-            print(f"Added new job to queue with ID: {job_id}")
             process_image = input_image
             process_prompt = prompt
             process_seed = seed
@@ -687,32 +633,19 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             process_preservation = gpu_memory_preservation
             process_teacache = use_teacache
     else:
-        print("\n=== DEBUG: Checking Pending Jobs ===")
-        # Check for pending jobs - using case-insensitive comparison
+        # Check for pending jobs
         pending_jobs = [job for job in job_queue if job.status.lower() == "pending"]
-        print(f"Found {len(pending_jobs)} pending jobs")
-        
         if not pending_jobs:
-            print("No pending jobs found, asserting input image requirement")
             assert input_image is not None, 'No input image!'
         
         # Process first pending job
         next_job = pending_jobs[0]
-        print(f"\n=== DEBUG: Processing Pending Job ===")
-        print(f"Job ID: {next_job.job_id}")
-        print(f"Image Path: {next_job.image_path}")
-        print(f"Prompt: {next_job.prompt}")
-        print(f"Status: {next_job.status}")
-        
         next_job.status = "processing"
         save_queue()
         job_id = next_job.job_id
         
         try:
-            print("\n=== DEBUG: Loading Image from Path ===")
-            print(f"Attempting to load image from: {next_job.image_path}")
             process_image = np.array(Image.open(next_job.image_path))
-            print(f"Image loaded successfully, shape: {process_image.shape}")
         except Exception as e:
             print(f"ERROR loading image: {str(e)}")
             traceback.print_exc()
@@ -727,12 +660,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         process_rs = next_job.rs
         process_preservation = next_job.gpu_memory_preservation
         process_teacache = next_job.use_teacache
-    
-    print("\n=== DEBUG: Starting Processing ===")
-    print(f"Using Job ID: {job_id}")
-    print(f"Process Image Shape: {process_image.shape if process_image is not None else 'None'}")
-    print(f"Process Prompt: {process_prompt}")
-    print(f"Process Seed: {process_seed}")
     
     # Start processing
     stream = AsyncStream()
@@ -753,15 +680,12 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         update_queue_display()         # queue_display
     )
 
-    print("\n=== DEBUG: Starting Output Queue Processing ===")
     # Process output queue
     while True:
         flag, data = stream.output_queue.next()
-        print(f"\n=== DEBUG: Queue Flag: {flag} ===")
 
         if flag == 'file':
             output_filename = data
-            print(f"Received file: {output_filename}")
             yield (
                 output_filename,  # result_video
                 gr.update(),  # preview_image
@@ -775,7 +699,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
         if flag == 'progress':
             preview, desc, html = data
-            print(f"Progress update: {desc}")
             yield (
                 gr.update(),  # result_video
                 gr.update(visible=True, value=preview),  # preview_image
@@ -788,23 +711,14 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             )
 
         if flag == 'end':
-            print("\n=== DEBUG: Job Completed ===")
             # Only remove the job if it completed normally (not ended by user)
             if not stream.input_queue.top() == 'end':
                 # Mark current job as completed and remove it
                 for job in job_queue:
                     if job.job_id == job_id:
-                        print(f"Marking job {job_id} as completed and removing from queue")
                         job.status = "completed"
                         job_queue.remove(job)
                         save_queue()
-                        break
-            else:
-                # Job was ended by user, just update its status (which should already be pending from end_process)
-                print("\n=== DEBUG: Job Ended by User ===")
-                for job in job_queue:
-                    if job.job_id == job_id:
-                        print(f"Job {job_id} was ended by user, status should be pending")
                         break
 
             # Check if we should continue processing (only if end button wasn't clicked)
@@ -815,27 +729,20 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 # First check for pending jobs
                 pending_jobs = [job for job in job_queue if job.status.lower() == "pending"]
                 if pending_jobs:
-                    print(f"\n=== DEBUG: Found {len(pending_jobs)} pending jobs")
                     next_job = pending_jobs[0]
                 else:
                     # If no pending jobs, check for just_added jobs
                     just_added_jobs = [job for job in job_queue if job.status == "just_added"]
                     if just_added_jobs:
-                        print(f"\n=== DEBUG: Found {len(just_added_jobs)} just_added jobs")
                         next_job = just_added_jobs[0]
 
                 if next_job:
-                    print(f"\n=== DEBUG: Starting Next Job ===")
-                    print(f"Next Job ID: {next_job.job_id}")
-                    print(f"Next Job Status: {next_job.status}")
                     # Update next job status to processing
                     next_job.status = "processing"
                     save_queue()
                     
                     try:
-                        print(f"Loading next image from: {next_job.image_path}")
                         next_image = np.array(Image.open(next_job.image_path))
-                        print(f"Next image loaded successfully, shape: {next_image.shape}")
                     except Exception as e:
                         print(f"ERROR loading next image: {str(e)}")
                         traceback.print_exc()
@@ -847,7 +754,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                              next_job.cfg, next_job.gs, next_job.rs, 
                              next_job.gpu_memory_preservation, next_job.use_teacache, mp4_crf)
                 else:
-                    print("\n=== DEBUG: No More Jobs ===")
                     # No more jobs, return to initial state
                     yield (
                         output_filename,  # result_video
@@ -862,7 +768,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                     break
             else:
                 # End button was clicked, stop processing
-                print("\n=== DEBUG: End Button Clicked, Stopping Processing ===")
                 yield (
                     output_filename,  # result_video
                     gr.update(visible=False),  # preview_image
@@ -878,7 +783,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 def end_process():
     """Handle end generation button click - stop all processes and change all processing jobs to pending jobs"""
     try:
-        print("\n=== DEBUG: End Process Called ===")
         # First send the end signal to stop all processes
         stream.input_queue.push('end')
         
@@ -895,18 +799,15 @@ def end_process():
         # Then process all jobs
         for job in job_queue:
             if job.status == "processing":
-                print(f"Changing job {job.job_id} status from {job.status} to pending")
                 job.status = "pending"
                 jobs_changed += 1
         
         # If we found a processing job, move it to the top
         if processing_job:
-            print(f"Moving job {processing_job.job_id} to top of queue")
             job_queue.remove(processing_job)
             job_queue.insert(0, processing_job)
         
         save_queue()
-        print(f"Queue saved with {jobs_changed} jobs changed to pending")
         return (
             update_queue_display(),  # queue_display
             gr.update(interactive=True)  # queue_button (always enabled)
@@ -922,11 +823,9 @@ def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_tea
         return [], gr.update(interactive=True)  # queue_button (always enabled)
     
     try:
-        print("\n=== DEBUG: Adding Job to Queue ===")
         # Change any existing just_added jobs to pending
         for job in job_queue:
             if job.status == "just_added":
-                print(f"Changing job {job.job_id} status from just_added to pending")
                 job.status = "pending"
         
         # Add new job with just_added status
@@ -946,11 +845,9 @@ def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_tea
         )
         
         if job_id is not None:
-            print(f"Job {job_id} added to queue successfully with status: just_added")
             save_queue()  # Save after changing statuses
             return update_queue_display(), gr.update(interactive=True)  # queue_button (always enabled)
         else:
-            print("Failed to add job to queue")
             return [], gr.update(interactive=True)  # queue_button (always enabled)
     except Exception as e:
         print(f"Error in add_to_queue_handler: {str(e)}")
@@ -1021,7 +918,26 @@ reset_processing_jobs()
 cleanup_orphaned_files()
 
 # Add custom CSS for the queue display
-css = make_progress_bar_css()
+css = make_progress_bar_css() + """
+.gradio-gallery-container {
+    max-height: 600px !important;
+    overflow-y: auto !important;
+    padding: 10px;
+}
+.gradio-gallery-container::-webkit-scrollbar {
+    width: 8px !important;
+}
+.gradio-gallery-container::-webkit-scrollbar-track {
+    background: #f0f0f0 !important;
+}
+.gradio-gallery-container::-webkit-scrollbar-thumb {
+    background-color: #666 !important;
+    border-radius: 4px !important;
+}
+.queue-gallery .gallery-item {
+    margin: 5px;
+}
+"""
 block = gr.Blocks(css=css).queue()
 with block:
     gr.Markdown('# FramePack')
@@ -1103,9 +1019,11 @@ with block:
                 label="Job Queue",
                 show_label=True,
                 columns=3,
-                height=600,
                 object_fit="contain",
-                elem_classes=["queue-gallery"]
+                elem_classes=["queue-gallery"],
+                allow_preview=True,
+                show_download_button=False,
+                container=True
             )
 
             # Load queue on startup
