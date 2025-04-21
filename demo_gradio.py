@@ -1,6 +1,7 @@
 from diffusers_helper.hf_login import login
 
 import os
+os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 import json
 import traceback
 from dataclasses import dataclass, asdict
