@@ -1244,4 +1244,3 @@ block.launch(
     share=args.share,
     inbrowser=args.inbrowser,
 )
-
