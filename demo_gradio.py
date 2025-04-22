@@ -42,7 +42,7 @@ import numpy as np
 import argparse
 import math
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from diffusers import AutoencoderKLHunyuanVideo
 from transformers import LlamaModel, CLIPTextModel, LlamaTokenizerFast, CLIPTokenizer
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
@@ -243,7 +243,7 @@ def update_queue_display():
 
             # Add job data to display
             if job.thumbnail:
-                caption = f"Status: {job.status}\nPrompt: {job.prompt[:50]}...\nLength: {job.video_length}s"
+                caption = f"{job.status}\n\nPrompt: {job.prompt}...\n\nLength: {job.video_length}s"
                 queue_data.append((job.thumbnail, caption))
         
         return queue_data
@@ -711,17 +711,14 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             )
 
         if flag == 'end':
-            # Only remove the job if it completed normally (not ended by user)
-            if not stream.input_queue.top() == 'end':
-                # Mark current job as completed and remove it
-                for job in job_queue:
-                    if job.job_id == job_id:
-                        job.status = "completed"
-                        job_queue.remove(job)
-                        save_queue()
-                        break
+            # Find and mark all processing jobs as completed
+            for job in job_queue:
+                if job.status == "processing":
+                    mark_job_completed(job)
+                    save_queue()
+                    break
 
-            # Check if we should continue processing (only if end button wasn't clicked)
+            # Then check if we should continue processing (only if end button wasn't clicked)
             if not stream.input_queue.top() == 'end':
                 # Find next job to process
                 next_job = None
@@ -754,6 +751,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                              next_job.cfg, next_job.gs, next_job.rs, 
                              next_job.gpu_memory_preservation, next_job.use_teacache, mp4_crf)
                 else:
+                    job_queue[:] = [job for job in job_queue if job.status != "completed"]
+                    save_queue()
                     # No more jobs, return to initial state
                     yield (
                         output_filename,  # result_video
@@ -768,6 +767,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                     break
             else:
                 # End button was clicked, stop processing
+                job_queue[:] = [job for job in job_queue if job.status != "completed"]
+                save_queue()
                 yield (
                     output_filename,  # result_video
                     gr.update(visible=False),  # preview_image
@@ -789,7 +790,8 @@ def end_process():
         # Find and update all processing jobs
         jobs_changed = 0
         processing_job = None
-        
+        job_queue[:] = [job for job in job_queue if job.status != "completed"]
+
         # First find the processing job
         for job in job_queue:
             if job.status == "processing":
@@ -887,6 +889,7 @@ def cleanup_orphaned_files():
 
 def reset_processing_jobs():
     """Reset any processing or just_added jobs to pending and move them to top of queue"""
+    job_queue[:] = [job for job in job_queue if job.status != "completed"]
     try:
         print("\n=== DEBUG: Reset Processing Jobs Called ===")
         # Find all processing and just_added jobs
@@ -911,6 +914,66 @@ def reset_processing_jobs():
         print(f"Queue saved with {len(jobs_to_move)} jobs moved to top")
     except Exception as e:
         print(f"Error in reset_processing_jobs: {str(e)}")
+        traceback.print_exc()
+
+def delete_job(job_id):
+    """Delete a job from the queue and its associated files"""
+    try:
+        # Find and remove job from queue
+        for job in job_queue:
+            if job.job_id == job_id:
+                # Delete associated files
+                if os.path.exists(job.image_path):
+                    os.remove(job.image_path)
+                if os.path.exists(job.thumbnail):
+                    os.remove(job.thumbnail)
+                job_queue.remove(job)
+                break
+        save_queue()
+        return update_queue_display()
+    except Exception as e:
+        print(f"Error deleting job: {str(e)}")
+        traceback.print_exc()
+        return update_queue_display()
+
+def mark_job_completed(job):
+    """Mark a job as completed and update its thumbnail with a green border and DONE text"""
+    try:
+        job.status = "completed"
+        
+        # Load and modify thumbnail
+        if job.thumbnail and os.path.exists(job.thumbnail):
+            img = Image.open(job.thumbnail)
+            
+            # Add green border
+            border_size = 5
+            img_with_border = Image.new('RGB', 
+                (img.width + border_size*2, img.height + border_size*2), 
+                (0, 255, 0))  # Green color
+            img_with_border.paste(img, (border_size, border_size))
+            
+            # Add DONE text
+            draw = ImageDraw.Draw(img_with_border)
+            font = ImageFont.truetype("arial.ttf", 40)  # You might need to adjust font path
+            text = "DONE"
+            text_bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            
+            # Position text in center
+            x = (img_with_border.width - text_width) // 2
+            y = (img_with_border.height - text_height) // 2
+            
+            # Draw text with black outline
+            for offset in [(-1,-1), (-1,1), (1,-1), (1,1)]:
+                draw.text((x+offset[0], y+offset[1]), text, font=font, fill=(0,0,0))
+            draw.text((x, y), text, font=font, fill=(255,255,255))
+            
+            # Save modified thumbnail
+            img_with_border.save(job.thumbnail)
+            
+    except Exception as e:
+        print(f"Error modifying thumbnail: {str(e)}")
         traceback.print_exc()
 
 # Add these calls at startup
@@ -1025,6 +1088,16 @@ with block:
                 show_download_button=False,
                 container=True
             )
+
+            # Add delete button for each job
+            delete_buttons = []
+            for job in job_queue:
+                delete_button = gr.Button(f"Delete Job {job.job_id}")
+                delete_button.click(
+                    fn=lambda j=job: delete_job(j.job_id),
+                    outputs=[queue_display]
+                )
+                delete_buttons.append(delete_button)
 
             # Load queue on startup
             block.load(
