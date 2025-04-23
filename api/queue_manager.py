@@ -3,10 +3,12 @@ import json
 import traceback
 import uuid
 import numpy as np
+import logging  # Move logging import here
 from dataclasses import dataclass
 from PIL import Image
 
 from . import settings  # Import settings to get paths
+
 
 # Queue file path (from settings)
 QUEUE_FILE = settings.QUEUE_FILE_PATH
@@ -200,17 +202,89 @@ def add_to_queue(prompt, image, video_length, seed, use_teacache, gpu_memory_pre
         return None
 
 
+# Removed redundant traceback import
+
+
 def get_next_job():
-    """Gets the next job from the global in-memory queue, removes it, and saves the queue."""
+    """
+    Gets the next pending job from the global in-memory queue,
+    updates its status to 'processing' in the file, and returns the job object.
+    Does NOT remove the job from the file until finalized.
+    """
     global job_queue
     try:
-        if job_queue:
-            job = job_queue.pop(0)  # Remove and return first job
-            save_queue()  # Save after removing job
-            return job
-        return None
+        # Find the first 'pending' job in the in-memory queue
+        job_to_process = None
+        job_index = -1
+        # Iterate through a copy of the queue indices to allow safe removal
+        indices = list(range(len(job_queue)))
+        for i in indices:
+            # Check if index is still valid after potential removals by other threads/processes (unlikely here but safer)
+            if i < len(job_queue):
+                job = job_queue[i]
+                if job.status == 'pending':
+                    job_to_process = job
+                    job_index = i
+                    break  # Found the first pending job
+
+        if job_to_process:
+            # Remove from in-memory queue to prevent other workers taking it
+            # Use del with index for potentially better performance than pop(index) in some scenarios
+            del job_queue[job_index]
+            logging.info(f"Worker picked up job {job_to_process.job_id}. Removed from in-memory pending list.")
+
+            # Update status to 'processing' in the persistent queue file
+            # We need to reload the queue from file, update the specific job, and save again.
+            # This ensures we are working with the most current state from the file.
+            current_persistent_queue = load_queue_from_file()
+            job_found_in_file = False
+            for job_in_file in current_persistent_queue:
+                if job_in_file.job_id == job_to_process.job_id:
+                    # Only update if it's still pending or somehow back to pending in the file
+                    # If it's already processing/completed/failed by another interaction, log it.
+                    if job_in_file.status == 'pending':
+                        job_in_file.status = 'processing'
+                        job_found_in_file = True
+                        logging.info(f"Updating status to 'processing' for job {job_to_process.job_id} in the queue file.")
+                    else:
+                        # This might indicate a race condition or unexpected state.
+                        logging.warning(f"Job {job_to_process.job_id} found in file but status is already '{job_in_file.status}', not 'pending'. Proceeding cautiously.")
+                        # We still removed it from memory, so let the worker process it,
+                        # but the file state might be inconsistent. Mark as found.
+                        job_found_in_file = True  # Treat as found for saving logic below
+                    break
+
+            if job_found_in_file:
+                # Save the updated queue back to the file
+                try:
+                    jobs_to_save = [j.to_dict() for j in current_persistent_queue if j.to_dict() is not None]
+                    file_path = os.path.abspath(QUEUE_FILE)
+                    with open(file_path, 'w') as f:
+                        json.dump(jobs_to_save, f, indent=2)
+                    logging.info(f"Queue file saved with job {job_to_process.job_id} marked as 'processing' (or existing status).")
+                    # Return the job object that the worker will process
+                    # Ensure the returned object also has the 'processing' status for the worker
+                    job_to_process.status = 'processing'  # Set status for the object being returned
+                    return job_to_process
+                except Exception as e:
+                    logging.error(f"Error saving queue after marking job {job_to_process.job_id} as processing: {e}")
+                    traceback.print_exc()
+                    # If saving fails, put the job back into the in-memory queue at the beginning
+                    job_queue.insert(0, job_to_process)  # Re-insert at the beginning
+                    logging.info(f"Re-inserted job {job_to_process.job_id} into memory queue due to save failure.")
+                    return None
+            else:
+                # This case should ideally not happen if the job was just in the in-memory queue
+                # loaded from the file, but handle defensively.
+                logging.error(f"Job {job_to_process.job_id} was popped from memory but not found in the file for status update. This indicates a potential state inconsistency.")
+                # Do not re-insert into memory queue as the file state is unknown/inconsistent.
+                return None
+        else:
+            # No pending jobs found in the in-memory queue
+            # logging.info("No pending jobs found in the in-memory queue.") # Optional: reduce log noise
+            return None
     except Exception as e:
-        print(f"Error getting next job: {str(e)}")
+        logging.error(f"Error getting next job: {str(e)}")
         traceback.print_exc()
         return None
 
@@ -276,10 +350,9 @@ def update_job_status(job_id: str, status: str, thumbnail: str = None):
     return job_updated
 
 
-import logging # Add logging import at the top if not already present
-
-# Configure logging (add this near the top of the file)
+# Configure logging (moved import to top)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 def update_job_progress(job_id: str, progress: float, step: int, total: int, info: str):
     """Updates the progress fields of a job in the global queue and saves the file."""
@@ -300,10 +373,10 @@ def update_job_progress(job_id: str, progress: float, step: int, total: int, inf
 
     if job_updated:
         logging.info(f"Progress updated for job {job_id} in memory. Attempting to save queue.")
-        if save_queue(): # Save if updated in memory
-             logging.info(f"Queue saved successfully after updating progress for job {job_id} in memory.")
+        if save_queue():  # Save if updated in memory
+            logging.info(f"Queue saved successfully after updating progress for job {job_id} in memory.")
         else:
-             logging.error(f"Failed to save queue after updating progress for job {job_id} in memory.")
+            logging.error(f"Failed to save queue after updating progress for job {job_id} in memory.")
 
     # If not found or updated in memory, try loading from file, updating, and saving
     if not job_found_in_memory:
@@ -355,7 +428,7 @@ def get_queue_status():
     load_queue_from_file()  # Reload global job_queue
     status_list = []
     for job in job_queue:  # Iterate over the reloaded global queue
-        logging.info(f"Getting status for job {job.job_id}. Current progress: {job.progress}") # Log progress here
+        logging.info(f"Getting status for job {job.job_id}. Current progress: {job.progress}")  # Log progress here
         status_list.append({
             "job_id": job.job_id,
             "status": job.status,
