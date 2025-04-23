@@ -1,13 +1,14 @@
 import pytest
-import torch  # Add torch import
+import torch
 from fastapi.testclient import TestClient
-# from fastapi.responses import FileResponse  # Flake8 reports line 3 unused
 import io
-import os  # Import os for stat mocking
-import time  # Import time for stat mocking
+import os
+import time
+import stat
+# import asyncio # Not directly used when only AsyncMock is needed
+from unittest.mock import AsyncMock  # For async context manager mock
 from PIL import Image
-# import numpy as np # Flake8 reports line 6 unused
-from api import queue_manager  # Import queue_manager at the top
+from api import queue_manager
 
 # Assuming your FastAPI app instance is named 'app' in 'api/api.py'
 from api.api import app
@@ -276,13 +277,24 @@ def test_get_result_completed(mocker):
     # Mock os.path.exists for the output file check to return True
     mocker.patch("os.path.exists", return_value=True)
     # Mock os.stat to return dummy file info, preventing FileNotFoundError inside FileResponse
+    # Set st_mode to indicate a regular file using stat.S_IFREG
     dummy_stat_result = os.stat_result((
-        0, 0, 0, 0, 0, 0, 1024, 0, time.time(), 0  # st_size=1024, st_mtime=now
+        stat.S_IFREG, 0, 0, 0, 0, 0, 1024, 0, time.time(), 0  # st_mode, st_size=1024, st_mtime=now
     ))
     mocker.patch("os.stat", return_value=dummy_stat_result)
     # Mock FileResponse class itself to prevent actual file reading/sending if stat passes
     # We still mock the class to check if it was called.
-    mock_file_response_cls = mocker.patch("fastapi.responses.FileResponse")
+    # Patch FileResponse where it's used (in the api.api module)
+    mock_file_response_cls = mocker.patch("api.api.FileResponse")
+
+    # Mock anyio.open_file to prevent actual file reading attempt
+    # Create a mock async context manager that simulates reading a file
+    mock_async_file_context = AsyncMock()
+    mock_file_object = AsyncMock()
+    # Configure the read method to return dummy data once, then empty bytes
+    mock_file_object.read.side_effect = [b"dummy video data chunk 1", b""]
+    mock_async_file_context.__aenter__.return_value = mock_file_object
+    mocker.patch("anyio.open_file", return_value=mock_async_file_context)
 
     # Send the GET request
     response = client.get(f"/result/{mock_job_id}")
@@ -293,7 +305,7 @@ def test_get_result_completed(mocker):
     # Need api.settings to construct the exact path
     # expected_path = os.path.join(settings.OUTPUTS_DIR, f"{mock_job_id}.mp4")
     # mock_file_response_cls.assert_called_once_with(expected_path, media_type="video/mp4", filename=f"{mock_job_id}.mp4")
-    mock_file_response_cls.assert_called_once()  # Basic check that the class was instantiated
+    mock_file_response_cls.assert_called_once()  # Restore the check
 
 
 def test_get_result_not_completed(mocker):
