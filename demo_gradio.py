@@ -651,7 +651,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             stream.output_queue.push(('file', output_filename))
 
             if is_last_section:
-                cleanup_old_videos(job_id, outputs_folder)
+                cleanup_old_videos(job_id, outputs_folder) #dont know why it leaves previos versions, so this deletes them
                 break
     except:
         traceback.print_exc()
