@@ -217,10 +217,13 @@ def get_next_job():
 
 def get_job_by_id(job_id: str) -> QueuedJob | None:
     """Finds a job by its ID by reading the queue file directly."""
+    logging.info(f"Attempting to get job by ID: {job_id}")
     current_queue = load_queue_from_file()  # Always read from file for this check
     for job in current_queue:
         if job.job_id == job_id:
+            logging.info(f"Job {job_id} found. Progress: {job.progress}, Info: '{job.progress_info}'")
             return job
+    logging.warning(f"Job {job_id} not found in queue file.")
     return None
 
 
@@ -273,8 +276,14 @@ def update_job_status(job_id: str, status: str, thumbnail: str = None):
     return job_updated
 
 
+import logging # Add logging import at the top if not already present
+
+# Configure logging (add this near the top of the file)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 def update_job_progress(job_id: str, progress: float, step: int, total: int, info: str):
     """Updates the progress fields of a job in the global queue and saves the file."""
+    logging.info(f"Attempting to update progress for job {job_id}: progress={progress}, step={step}, total={total}, info='{info}'")
     global job_queue
     job_updated = False
     job_found_in_memory = False
@@ -286,17 +295,24 @@ def update_job_progress(job_id: str, progress: float, step: int, total: int, inf
             job.progress_info = info
             job_updated = True
             job_found_in_memory = True
+            logging.info(f"Job {job_id} found in memory. Updating progress.")
             break
 
     if job_updated:
-        save_queue()  # Save if updated in memory
+        logging.info(f"Progress updated for job {job_id} in memory. Attempting to save queue.")
+        if save_queue(): # Save if updated in memory
+             logging.info(f"Queue saved successfully after updating progress for job {job_id} in memory.")
+        else:
+             logging.error(f"Failed to save queue after updating progress for job {job_id} in memory.")
 
     # If not found or updated in memory, try loading from file, updating, and saving
     if not job_found_in_memory:
+        logging.info(f"Job {job_id} not found in memory. Attempting to load from file.")
         current_queue = load_queue_from_file()
         job_found_in_file = False
         for job in current_queue:
             if job.job_id == job_id:
+                logging.info(f"Job {job_id} found in file. Updating progress.")
                 job.progress = progress
                 job.progress_step = step
                 job.progress_total = total
@@ -305,6 +321,7 @@ def update_job_progress(job_id: str, progress: float, step: int, total: int, inf
                 break
 
         if job_found_in_file:
+            logging.info(f"Progress updated for job {job_id} in file data. Attempting to save queue.")
             # Overwrite the file with the updated list
             try:
                 jobs_to_save = [j.to_dict() for j in current_queue if j.to_dict() is not None]
@@ -312,15 +329,19 @@ def update_job_progress(job_id: str, progress: float, step: int, total: int, inf
                 with open(file_path, 'w') as f:
                     json.dump(jobs_to_save, f, indent=2)
                 job_updated = True  # Mark as updated since we saved the file
+                logging.info(f"Queue saved successfully after updating progress for job {job_id} found in file.")
                 # Update the global in-memory queue as well
                 job_queue = current_queue  # Update global variable after successful save
+                logging.info(f"Global job_queue updated with file content for job {job_id}.")
             except Exception as e:
-                print(f"Error saving queue after updating progress for job {job_id} found in file: {e}")
+                logging.error(f"Error saving queue after updating progress for job {job_id} found in file: {e}")
                 traceback.print_exc()
                 job_updated = False  # Ensure update status reflects save failure
         else:
-            print(f"Job with ID {job_id} not found in memory or file for progress update.")
+            logging.warning(f"Job with ID {job_id} not found in memory or file for progress update.")
 
+    if not job_updated:
+        logging.warning(f"Progress update failed for job {job_id}.")
     return job_updated
 
 
@@ -334,6 +355,7 @@ def get_queue_status():
     load_queue_from_file()  # Reload global job_queue
     status_list = []
     for job in job_queue:  # Iterate over the reloaded global queue
+        logging.info(f"Getting status for job {job.job_id}. Current progress: {job.progress}") # Log progress here
         status_list.append({
             "job_id": job.job_id,
             "status": job.status,
