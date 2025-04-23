@@ -120,6 +120,11 @@ class QueueStatusResponse(BaseModel):
     queue: List[dict]  # List of job summaries
 
 
+class WorkerStatusResponse(BaseModel):
+    is_running: bool
+    processing_job_id: Optional[str] = None
+
+
 # --- Background Worker ---
 def background_worker_task():
     global worker_running, currently_processing_job_id
@@ -297,6 +302,53 @@ async def get_queue_info():
     # Implementation needed: Get queue status from queue_manager
     queue_status = queue_manager.get_queue_status()
     return QueueStatusResponse(queue=queue_status)
+
+
+@app.get("/worker/status", response_model=WorkerStatusResponse)
+async def get_worker_status():
+    """Returns the current status of the background worker."""
+    global worker_running, currently_processing_job_id
+    return WorkerStatusResponse(
+        is_running=worker_running,
+        processing_job_id=currently_processing_job_id
+    )
+
+
+@app.post("/cancel/{job_id}", status_code=200)
+async def cancel_job(job_id: str):
+    """Requests cancellation of a job."""
+    # Check if the job exists (optional but good practice)
+    job = queue_manager.get_job_by_id(job_id)
+    output_file = os.path.join(settings.OUTPUTS_DIR, f"{job_id}.mp4")
+
+    if not job and not os.path.exists(output_file):
+        # If job not in queue and output doesn't exist, it's likely invalid
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job and job.status == "completed":
+        return {"message": "Job is already completed."}
+    if not job and os.path.exists(output_file):
+        return {"message": "Job is already completed (output file exists)."}
+
+    # Update the job status to cancelled
+    updated = queue_manager.update_job_status(job_id, "cancelled")
+
+    if updated:
+        print(f"Cancellation requested for job {job_id}")
+        return {"message": f"Cancellation requested for job {job_id}."}
+    else:
+        # This might happen if the job completed between the check and the update,
+        # or if get_job_by_id failed unexpectedly after the initial check.
+        # Re-check status to provide a more accurate response.
+        final_check_job = queue_manager.get_job_by_id(job_id)
+        if final_check_job and final_check_job.status == "completed":
+            return {"message": "Job completed before cancellation could be fully processed."}
+        elif not final_check_job and os.path.exists(output_file):
+            return {"message": "Job completed before cancellation could be fully processed (output file exists)."}
+        else:
+            # If still not found or status isn't completed, raise internal error
+            print(f"Failed to update status to cancelled for job {job_id}, job might not exist anymore.")
+            raise HTTPException(status_code=500, detail="Failed to request job cancellation. Job might have finished or encountered an issue.")
 
 
 # --- Main execution (for running with uvicorn) ---

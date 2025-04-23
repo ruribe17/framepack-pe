@@ -282,11 +282,10 @@ def worker(job: queue_manager.QueuedJob, models: dict):
                 70 / sampling_step_count
             )
 
-            # Check for cancellation signal (e.g., if job status is set to 'cancelled')
-            current_job_status = queue_manager.get_job_by_id(job_id)  # Use the function that reads the file
-            if current_job_status and current_job_status.status == "cancelled":
-                print(f"Job {job_id} cancelled during sampling.")
-                # No need to update status again, it's already 'cancelled'
+            # Check for cancellation signal at the beginning of each section
+            current_job_status_section_start = queue_manager.get_job_by_id(job_id)
+            if current_job_status_section_start and current_job_status_section_start.status == "cancelled":
+                print(f"Job {job_id} cancellation detected at start of section {current_sampling_step}.")
                 return
 
             is_last_section = latent_padding == 0
