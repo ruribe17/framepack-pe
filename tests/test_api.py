@@ -5,6 +5,7 @@ import io
 import os
 import time
 import stat
+import sys    # Import sys to modify sys.modules
 # import asyncio # Not directly used when only AsyncMock is needed
 from unittest.mock import AsyncMock  # For async context manager mock
 from PIL import Image
@@ -26,6 +27,16 @@ def mock_heavy_operations(mocker):
     - Mocks the background worker task to prevent it from starting.
     - Mocks GPU/CUDA related functions to avoid errors in environments without NVIDIA drivers.
     """
+    # --- Mock problematic imports causing fatal errors ---
+    # Mock the entire sageattention module and its submodules early in sys.modules
+    # to prevent DLL loading errors during import or patching attempts later.
+    sys.modules['sageattention'] = mocker.MagicMock()
+    sys.modules['sageattention.core'] = mocker.MagicMock()
+    sys.modules['sageattention.quant'] = mocker.MagicMock()
+    # Mock triton as well, as it might be another source of import/DLL issues in test env
+    sys.modules['triton'] = mocker.MagicMock()
+    sys.modules['triton.language'] = mocker.MagicMock()    # Mock submodules if accessed directly
+
     # Mock model loading
     mocker.patch.dict("api.api.loaded_models", {"model": "mocked"}, clear=True)
     # Mock background worker
@@ -56,6 +67,8 @@ def mock_heavy_operations(mocker):
     # Mock DynamicSwapInstaller methods if they interact with CUDA implicitly or cause issues
     mocker.patch("diffusers_helper.memory.DynamicSwapInstaller.install_model")
     mocker.patch("diffusers_helper.memory.DynamicSwapInstaller.uninstall_model")
+
+    # No longer need specific extension mocks as the parent modules are mocked
 
 
 # Helper function to create a dummy image for uploads
