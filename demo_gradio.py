@@ -75,6 +75,8 @@ class QueuedJob:
     status: str = "pending"
     thumbnail: str = ""
     mp4_crf: float = 16
+    keep_temp_png: bool = False
+    keep_temp_mp4: bool = False
 
     def to_dict(self):
         try:
@@ -93,7 +95,9 @@ class QueuedJob:
                 'n_prompt': self.n_prompt, 
                 'status': self.status,
                 'thumbnail': self.thumbnail,
-                'mp4_crf': self.mp4_crf
+                'mp4_crf': self.mp4_crf,
+                'keep_temp_png': self.keep_temp_png,
+                'keep_temp_mp4': self.keep_temp_mp4
             }
         except Exception as e:
             print(f"Error converting job to dict: {str(e)}")
@@ -117,7 +121,9 @@ class QueuedJob:
                 n_prompt=data['n_prompt'],
                 status=data['status'],
                 thumbnail=data['thumbnail'],
-                mp4_crf=data['mp4_crf']
+                mp4_crf=data['mp4_crf'],
+                keep_temp_png=data.get('keep_temp_png', False),  # Default to False for backward compatibility
+                keep_temp_mp4=data.get('keep_temp_mp4', False)   # Default to False for backward compatibility
             )
         except Exception as e:
             print(f"Error creating job from dict: {str(e)}")
@@ -188,7 +194,7 @@ def save_image_to_temp(image: np.ndarray, job_id: str) -> str:
         traceback.print_exc()
         return ""
 
-def add_to_queue(prompt, n_prompt, image, video_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, status="pending", mp4_crf=16):
+def add_to_queue(prompt, n_prompt, image, video_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, status="pending", mp4_crf=16, keep_temp_png=False, keep_temp_mp4=False):
     try:
         # Generate a unique hex ID for the job
         job_id = uuid.uuid4().hex[:8]
@@ -211,7 +217,9 @@ def add_to_queue(prompt, n_prompt, image, video_length, seed, use_teacache, gpu_
             rs=rs,
             n_prompt=n_prompt,
             status=status,
-            mp4_crf=mp4_crf
+            mp4_crf=mp4_crf,
+            keep_temp_png=keep_temp_png,
+            keep_temp_mp4=keep_temp_mp4
         )
         
         # Find the first completed job to insert before
@@ -387,10 +395,28 @@ stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
-def cleanup_old_videos(job_id: str, outputs_folder: str) -> None:
+def clean_up_temp_mp4png(job_id: str, outputs_folder: str, keep_temp_png: bool = False, keep_temp_mp4: bool = False) -> None:
     """
     Deletes all '<job_id>_<n>.mp4' in outputs_folder except the one with the largest n.
+    Also deletes the '<job_id>.png' file.
+    If keep_temp_png is True, no PNG file will be deleted.
+    If keep_temp_mp4 is True, no MP4 files will be deleted.
     """
+    print(f"clean_up_temp_mp4png called with keep_temp_png={keep_temp_png}, keep_temp_mp4={keep_temp_mp4}")
+    if keep_temp_png:
+        print(f"Keeping temporary PNG file for job {job_id} as requested")
+    if keep_temp_mp4:
+        print(f"Keeping temporary MP4 files for job {job_id} as requested")
+
+    # Delete the PNG file
+    png_path = os.path.join(outputs_folder, f'{job_id}.png')
+    try:
+        if os.path.exists(png_path) and not keep_temp_png:
+            os.remove(png_path)
+            print(f"Deleted PNG file: {png_path}")
+    except OSError as e:
+        print(f"Failed to delete PNG file {png_path}: {e}")
+
     # regex to grab the trailing number
     pattern = re.compile(rf'^{re.escape(job_id)}_(\d+)\.mp4$')
     candidates = []
@@ -410,7 +436,7 @@ def cleanup_old_videos(job_id: str, outputs_folder: str) -> None:
 
     # delete all but the highest
     for count, fname in candidates:
-        if count != highest_count:
+        if count != highest_count and not (keep_temp_mp4 and fname.endswith('.mp4')):
             path = os.path.join(outputs_folder, fname)
             try:
                 os.remove(path)
@@ -421,7 +447,8 @@ def cleanup_old_videos(job_id: str, outputs_folder: str) -> None:
 
 
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, keep_temp_png, keep_temp_mp4):
+    print(f"worker called with keep_temp_png={keep_temp_png}, keep_temp_mp4={keep_temp_mp4}")
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -651,7 +678,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             stream.output_queue.push(('file', output_filename))
 
             if is_last_section:
-                cleanup_old_videos(job_id, outputs_folder) #dont know why it leaves previos versions, so this deletes them
+                print(f"Calling clean_up_temp_mp4png with keep_temp_png={keep_temp_png}, keep_temp_mp4={keep_temp_mp4}")
+                clean_up_temp_mp4png(job_id, outputs_folder, keep_temp_png, keep_temp_mp4)
                 break
     except:
         traceback.print_exc()
@@ -804,7 +832,8 @@ def mark_job_pending(job):
         print(f"Error modifying thumbnail: {str(e)}")
         traceback.print_exc()
 
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, keep_temp_png, keep_temp_mp4):
+    print(f"process called with keep_temp_png={keep_temp_png}, keep_temp_mp4={keep_temp_mp4}")
     global stream
     
     # Initialize variables
@@ -838,8 +867,11 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 gs=gs,
                 rs=rs,
                 status=status,
-                mp4_crf=mp4_crf
+                mp4_crf=mp4_crf,
+                keep_temp_png=keep_temp_png,
+                keep_temp_mp4=keep_temp_mp4
             )
+            print(f"Added job to queue with keep_temp_png={keep_temp_png}, keep_temp_mp4={keep_temp_mp4}")
         
         # After adding all jobs, process the first one
         input_image = input_image[0]
@@ -870,6 +902,9 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             process_rs = next_job.rs
             process_preservation = next_job.gpu_memory_preservation
             process_teacache = next_job.use_teacache
+            process_keep_temp_png = next_job.keep_temp_png
+            process_keep_temp_mp4 = next_job.keep_temp_mp4
+            print(f"Processing just_added job with keep_temp_png={process_keep_temp_png}, keep_temp_mp4={process_keep_temp_mp4}")
         else:
             # Process input image
             job_id = add_to_queue(
@@ -885,8 +920,11 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 gs=gs,
                 rs=rs,
                 status="processing",
-                mp4_crf=mp4_crf
+                mp4_crf=mp4_crf,
+                keep_temp_png=keep_temp_png,
+                keep_temp_mp4=keep_temp_mp4
             )
+            print(f"Added new job to queue with keep_temp_png={keep_temp_png}, keep_temp_mp4={keep_temp_mp4}")
             # Find and mark the new job as processing
             for job in job_queue:
                 if job.job_id == job_id:
@@ -902,6 +940,9 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             process_rs = rs
             process_preservation = gpu_memory_preservation
             process_teacache = use_teacache
+            process_keep_temp_png = keep_temp_png
+            process_keep_temp_mp4 = keep_temp_mp4
+            print(f"Processing new job with keep_temp_png={process_keep_temp_png}, keep_temp_mp4={process_keep_temp_mp4}")
     else:
         # Check for pending jobs
         pending_jobs = [job for job in job_queue if job.status.lower() == "pending"]
@@ -930,13 +971,17 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         process_rs = next_job.rs
         process_preservation = next_job.gpu_memory_preservation
         process_teacache = next_job.use_teacache
+        process_keep_temp_png = next_job.keep_temp_png
+        process_keep_temp_mp4 = next_job.keep_temp_mp4
+        print(f"Processing pending job with keep_temp_png={process_keep_temp_png}, keep_temp_mp4={process_keep_temp_mp4}")
     
     # Start processing
     stream = AsyncStream()
+    print(f"Starting worker with keep_temp_png={process_keep_temp_png}, keep_temp_mp4={process_keep_temp_mp4}")
     async_run(worker, process_image, process_prompt, n_prompt, process_seed, 
              process_length, latent_window_size, process_steps, 
              process_cfg, process_gs, process_rs, 
-             process_preservation, process_teacache, mp4_crf)
+             process_preservation, process_teacache, mp4_crf, process_keep_temp_png, process_keep_temp_mp4)
     
     # Initial yield with updated queue display and button states
     yield (
@@ -1021,7 +1066,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                     async_run(worker, next_image, next_job.prompt, next_job.n_prompt, next_job.seed, 
                              next_job.video_length, latent_window_size, next_job.steps, 
                              next_job.cfg, next_job.gs, next_job.rs, 
-                             next_job.gpu_memory_preservation, next_job.use_teacache, mp4_crf)
+                             next_job.gpu_memory_preservation, next_job.use_teacache, mp4_crf, next_job.keep_temp_png, next_job.keep_temp_mp4)
                 else:
                     job_queue[:] = [job for job in job_queue if job.status != "completed"]
                     save_queue()
@@ -1093,7 +1138,7 @@ def end_process():
         traceback.print_exc()
         return [], gr.update(interactive=True)  # queue_button (always enabled)
 
-def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, n_prompt, mp4_crf):
+def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, n_prompt, mp4_crf, keep_temp_png, keep_temp_mp4):
     """Handle adding a new job to the queue"""
     if input_image is None or not prompt:
         return [], gr.update(interactive=True)  # queue_button (always enabled)
@@ -1124,7 +1169,9 @@ def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_tea
                     gs=gs,
                     rs=rs,
                     status="pending",  # All images get pending status when using Add to Queue
-                    mp4_crf=mp4_crf
+                    mp4_crf=mp4_crf,
+                    keep_temp_png=keep_temp_png,
+                    keep_temp_mp4=keep_temp_mp4
                 )
         else:
             # Single image case
@@ -1149,7 +1196,9 @@ def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_tea
                 gs=gs,
                 rs=rs,
                 status="pending",  # Single image gets pending status when using Add to Queue
-                mp4_crf=mp4_crf
+                mp4_crf=mp4_crf,
+                keep_temp_png=keep_temp_png,
+                keep_temp_mp4=keep_temp_mp4
             )
         
         if job_id is not None:
@@ -1311,7 +1360,7 @@ with block:
 
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
-                seed = gr.Number(label="Seed", value=31337, precision=0)
+                seed = gr.Number(label="Seed", value=-1, precision=0)
                 total_second_length = gr.Slider(label="Total Video Length (Seconds)", minimum=1, maximum=120, value=5, step=0.1)
                 latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)  # Should not change
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1, info='Changing this value is not recommended.')
@@ -1323,6 +1372,8 @@ with block:
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger value causes slower speed.")
 
                 mp4_crf = gr.Slider(label="MP4 Compression", minimum=0, maximum=100, value=16, step=1, info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs. ")
+                keep_temp_png = gr.Checkbox(label="Keep temp PNG file", value=False, info="If checked, temporary PNG file will not be deleted after processing")
+                keep_temp_mp4 = gr.Checkbox(label="Keep temp MP4 files", value=False, info="If checked, temporary MP4 files will not be deleted after processing")
 
             # Set default prompt and length
             default_prompt, default_n_prompt, default_length, default_gs = get_default_prompt()
@@ -1404,7 +1455,7 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
-    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
+    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, keep_temp_png, keep_temp_mp4]
     start_button.click(
         fn=process, 
         inputs=ips, 
@@ -1416,7 +1467,7 @@ with block:
     )
     queue_button.click(
         fn=add_to_queue_handler,
-        inputs=[input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, n_prompt, mp4_crf],
+        inputs=[input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, n_prompt, mp4_crf, keep_temp_png, keep_temp_mp4],
         outputs=[queue_display, queue_button]
     )
 
