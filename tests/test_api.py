@@ -3,6 +3,8 @@ import torch  # Add torch import
 from fastapi.testclient import TestClient
 # from fastapi.responses import FileResponse  # Flake8 reports line 3 unused
 import io
+import os  # Import os for stat mocking
+import time  # Import time for stat mocking
 from PIL import Image
 # import numpy as np # Flake8 reports line 6 unused
 from api import queue_manager  # Import queue_manager at the top
@@ -273,9 +275,14 @@ def test_get_result_completed(mocker):
     mocker.patch("api.queue_manager.get_job_by_id", return_value=mock_job_data)
     # Mock os.path.exists for the output file check to return True
     mocker.patch("os.path.exists", return_value=True)
-    # Mock FileResponse to prevent actual file reading/sending
-    # Note: FileResponse is imported from fastapi, not api.api directly usually
-    mock_file_response = mocker.patch("fastapi.responses.FileResponse")
+    # Mock os.stat to return dummy file info, preventing FileNotFoundError inside FileResponse
+    dummy_stat_result = os.stat_result((
+        0, 0, 0, 0, 0, 0, 1024, 0, time.time(), 0  # st_size=1024, st_mtime=now
+    ))
+    mocker.patch("os.stat", return_value=dummy_stat_result)
+    # Mock FileResponse class itself to prevent actual file reading/sending if stat passes
+    # We still mock the class to check if it was called.
+    mock_file_response_cls = mocker.patch("fastapi.responses.FileResponse")
 
     # Send the GET request
     response = client.get(f"/result/{mock_job_id}")
@@ -285,8 +292,8 @@ def test_get_result_completed(mocker):
     # Check if FileResponse was called with expected arguments
     # Need api.settings to construct the exact path
     # expected_path = os.path.join(settings.OUTPUTS_DIR, f"{mock_job_id}.mp4")
-    # mock_file_response.assert_called_once_with(expected_path, media_type="video/mp4", filename=f"{mock_job_id}.mp4")
-    mock_file_response.assert_called_once()  # Basic check that it was called
+    # mock_file_response_cls.assert_called_once_with(expected_path, media_type="video/mp4", filename=f"{mock_job_id}.mp4")
+    mock_file_response_cls.assert_called_once()  # Basic check that the class was instantiated
 
 
 def test_get_result_not_completed(mocker):
