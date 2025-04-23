@@ -32,6 +32,11 @@ class QueuedJob:
     status: str = "pending"
     thumbnail: str = ""
     mp4_crf: float = 16
+    # Progress tracking fields
+    progress: float = 0.0
+    progress_step: int = 0
+    progress_total: int = 0  # Default to 0, will be set by worker
+    progress_info: str = ""
 
     def to_dict(self):
         try:
@@ -49,7 +54,12 @@ class QueuedJob:
                 'rs': self.rs,
                 'status': self.status,
                 'thumbnail': self.thumbnail,
-                'mp4_crf': self.mp4_crf
+                'mp4_crf': self.mp4_crf,
+                # Progress fields
+                'progress': self.progress,
+                'progress_step': self.progress_step,
+                'progress_total': self.progress_total,
+                'progress_info': self.progress_info,
             }
         except Exception as e:
             print(f"Error converting job to dict: {str(e)}")
@@ -72,7 +82,12 @@ class QueuedJob:
                 rs=data.get('rs', 1.0),
                 status=data.get('status', 'pending'),
                 thumbnail=data.get('thumbnail', ''),
-                mp4_crf=data.get('mp4_crf', 16.0)
+                mp4_crf=data.get('mp4_crf', 16.0),
+                # Progress fields with defaults
+                progress=data.get('progress', 0.0),
+                progress_step=data.get('progress_step', 0),
+                progress_total=data.get('progress_total', 0),
+                progress_info=data.get('progress_info', '')
             )
         except Exception as e:
             print(f"Error creating job from dict: {str(e)}")
@@ -258,6 +273,57 @@ def update_job_status(job_id: str, status: str, thumbnail: str = None):
     return job_updated
 
 
+def update_job_progress(job_id: str, progress: float, step: int, total: int, info: str):
+    """Updates the progress fields of a job in the global queue and saves the file."""
+    global job_queue
+    job_updated = False
+    job_found_in_memory = False
+    for job in job_queue:
+        if job.job_id == job_id:
+            job.progress = progress
+            job.progress_step = step
+            job.progress_total = total
+            job.progress_info = info
+            job_updated = True
+            job_found_in_memory = True
+            break
+
+    if job_updated:
+        save_queue()  # Save if updated in memory
+
+    # If not found or updated in memory, try loading from file, updating, and saving
+    if not job_found_in_memory:
+        current_queue = load_queue_from_file()
+        job_found_in_file = False
+        for job in current_queue:
+            if job.job_id == job_id:
+                job.progress = progress
+                job.progress_step = step
+                job.progress_total = total
+                job.progress_info = info
+                job_found_in_file = True
+                break
+
+        if job_found_in_file:
+            # Overwrite the file with the updated list
+            try:
+                jobs_to_save = [j.to_dict() for j in current_queue if j.to_dict() is not None]
+                file_path = os.path.abspath(QUEUE_FILE)
+                with open(file_path, 'w') as f:
+                    json.dump(jobs_to_save, f, indent=2)
+                job_updated = True  # Mark as updated since we saved the file
+                # Update the global in-memory queue as well
+                job_queue = current_queue  # Update global variable after successful save
+            except Exception as e:
+                print(f"Error saving queue after updating progress for job {job_id} found in file: {e}")
+                traceback.print_exc()
+                job_updated = False  # Ensure update status reflects save failure
+        else:
+            print(f"Job with ID {job_id} not found in memory or file for progress update.")
+
+    return job_updated
+
+
 def get_queue_status():
     """Returns a list of job statuses and basic info."""
     global job_queue
@@ -272,7 +338,10 @@ def get_queue_status():
             "job_id": job.job_id,
             "status": job.status,
             "prompt": job.prompt[:50] + "..." if len(job.prompt) > 50 else job.prompt,  # Truncate long prompts
-            "video_length": job.video_length
+            "video_length": job.video_length,
+            # Include progress in status summary
+            "progress": job.progress,
+            "progress_info": job.progress_info,
         })
     return status_list
 
