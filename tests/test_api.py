@@ -7,21 +7,26 @@ import numpy as np
 from api import queue_manager  # Import queue_manager at the top
 
 # Assuming your FastAPI app instance is named 'app' in 'api/api.py'
-# Adjust the import path if your project structure is different
-try:
-    from api.api import app
-except ImportError:
-    # Handle cases where tests might be run from a different context
-    # This might need adjustment based on how you run pytest
-    import sys
-    import os
-    # Add the project root to the Python path
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from api.api import app
+from api.api import app
 
 
 # Create a TestClient instance
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def mock_heavy_operations(mocker):
+    """
+    Fixture to automatically mock heavy operations for all tests.
+    - Mocks model loading to return a dummy dict.
+    - Mocks the background worker task to prevent it from starting.
+    """
+    # Mock model loading
+    mocker.patch("api.models.load_models", return_value={'model': 'mocked'})
+    # Mock background worker thread target
+    mocker.patch("api.api.background_worker_task")
+    # Mock models.unload_models during shutdown to avoid errors if it expects real models
+    mocker.patch("api.models.unload_models")
 
 
 # Helper function to create a dummy image for uploads
@@ -384,6 +389,8 @@ def test_cancel_job_not_found(mocker):
 
     # Verify that update_job_status was NOT called
     mock_update_status.assert_not_called()
+
+
 def test_get_worker_status_processing(mocker):
     """Test getting worker status when it's processing a job."""
     mock_job_id = "workerjobVWX"
@@ -400,10 +407,11 @@ def test_get_worker_status_processing(mocker):
     assert response_json["is_running"] is True
     assert response_json["processing_job_id"] == mock_job_id
 
+
 def test_get_worker_status_idle(mocker):
     """Test getting worker status when it's idle."""
     # Mock the global variables in api.api
-    mocker.patch("api.api.worker_running", True) # Still running, but no job
+    mocker.patch("api.api.worker_running", True)  # Still running, but no job
     mocker.patch("api.api.currently_processing_job_id", None)
 
     # Send the GET request
@@ -415,11 +423,12 @@ def test_get_worker_status_idle(mocker):
     assert response_json["is_running"] is True
     assert response_json["processing_job_id"] is None
 
+
 def test_get_worker_status_not_running(mocker):
     """Test getting worker status when it's not running."""
     # Mock the global variables in api.api
     mocker.patch("api.api.worker_running", False)
-    mocker.patch("api.api.currently_processing_job_id", None) # Should be None if not running
+    mocker.patch("api.api.currently_processing_job_id", None)  # Should be None if not running
 
     # Send the GET request
     response = client.get("/worker/status")

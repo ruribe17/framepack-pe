@@ -1,0 +1,40 @@
+name: Python CI
+
+# ワークフローが実行されるトリガーを定義
+on:
+  push:
+    branches: [ main ] # mainブランチへのpush時
+  pull_request:
+    branches: [ main ] # mainブランチへのpull request時
+
+jobs:
+  test:
+    # ジョブを実行するランナー（OS）を指定
+    runs-on: ubuntu-latest
+
+    strategy:
+      # 複数のPythonバージョンでテストする場合
+      matrix:
+        python-version: ["3.10", "3.11"] # プロジェクトで使用しているPythonバージョンに合わせてください
+
+    steps:
+    # 1. リポジトリのコードをチェックアウト
+    - uses: actions/checkout@v4
+
+    # 2. 指定したバージョンのPython環境をセットアップ
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    # 3. 依存関係をインストール
+    #    キャッシュを使うと高速化できます (オプション)
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # 4. pytestを実行
+    - name: Run tests
+      run: |
+        pytest
