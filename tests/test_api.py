@@ -1,9 +1,10 @@
 import pytest
+import torch  # Add torch import
 from fastapi.testclient import TestClient
-from fastapi.responses import FileResponse  # Move import here
+# from fastapi.responses import FileResponse  # Flake8 reports line 3 unused
 import io
 from PIL import Image
-import numpy as np
+# import numpy as np # Flake8 reports line 6 unused
 from api import queue_manager  # Import queue_manager at the top
 
 # Assuming your FastAPI app instance is named 'app' in 'api/api.py'
@@ -20,14 +21,38 @@ def mock_heavy_operations(mocker):
     Fixture to automatically mock heavy operations for all tests.
     - Mocks model loading to return a dummy dict.
     - Mocks the background worker task to prevent it from starting.
+    - Mocks GPU/CUDA related functions to avoid errors in environments without NVIDIA drivers.
     """
-    # Directly patch the global 'loaded_models' dictionary in api.api
-    # to ensure it's not empty during tests, bypassing the actual load_models call.
+    # Mock model loading
     mocker.patch.dict("api.api.loaded_models", {"model": "mocked"}, clear=True)
-    # Mock background worker thread target
+    # Mock background worker
     mocker.patch("api.api.background_worker_task")
-    # Mock models.unload_models during shutdown
+    # Mock model unloading during shutdown
     mocker.patch("api.models.unload_models")
+
+    # --- Mock GPU/CUDA related parts ---
+    # Mock the gpu device object itself to avoid cuda initialization error at import time
+    # Need to mock where it's defined and potentially where it's used if imported directly
+    mocker.patch("diffusers_helper.memory.gpu", torch.device('cpu'))  # Use cpu device
+    mocker.patch("api.models.gpu", torch.device('cpu'))  # Mock in models module too if imported there
+
+    # Mock functions that interact with CUDA memory or device properties
+    mocker.patch("diffusers_helper.memory.get_cuda_free_memory_gb", return_value=16.0)  # Return dummy high value
+    mocker.patch("diffusers_helper.memory.torch.cuda.is_available", return_value=False)
+    mocker.patch("diffusers_helper.memory.torch.cuda.current_device", return_value=0)  # Return dummy device index
+    mocker.patch("diffusers_helper.memory.torch.cuda.empty_cache")  # Mock to do nothing
+    mocker.patch("diffusers_helper.memory.torch.cuda.mem_get_info", return_value=(16 * 1024 ** 3, 16 * 1024 ** 3))
+    mocker.patch("diffusers_helper.memory.torch.cuda.memory_stats", return_value={'active_bytes.all.current': 0, 'reserved_bytes.all.current': 0})
+
+    # Mock functions that move models (they might still be called by logic we don't bypass)
+    mocker.patch("diffusers_helper.memory.move_model_to_device_with_memory_preservation")
+    mocker.patch("diffusers_helper.memory.offload_model_from_device_for_memory_preservation")
+    mocker.patch("diffusers_helper.memory.load_model_as_complete")
+    mocker.patch("diffusers_helper.memory.unload_complete_models")
+
+    # Mock DynamicSwapInstaller methods if they interact with CUDA implicitly or cause issues
+    mocker.patch("diffusers_helper.memory.DynamicSwapInstaller.install_model")
+    mocker.patch("diffusers_helper.memory.DynamicSwapInstaller.uninstall_model")
 
 
 # Helper function to create a dummy image for uploads
@@ -249,7 +274,8 @@ def test_get_result_completed(mocker):
     # Mock os.path.exists for the output file check to return True
     mocker.patch("os.path.exists", return_value=True)
     # Mock FileResponse to prevent actual file reading/sending
-    mock_file_response = mocker.patch("api.api.FileResponse")
+    # Note: FileResponse is imported from fastapi, not api.api directly usually
+    mock_file_response = mocker.patch("fastapi.responses.FileResponse")
 
     # Send the GET request
     response = client.get(f"/result/{mock_job_id}")
