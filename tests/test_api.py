@@ -21,11 +21,12 @@ def mock_heavy_operations(mocker):
     - Mocks model loading to return a dummy dict.
     - Mocks the background worker task to prevent it from starting.
     """
-    # Mock model loading
-    mocker.patch("api.models.load_models", return_value={'model': 'mocked'})
+    # Directly patch the global 'loaded_models' dictionary in api.api
+    # to ensure it's not empty during tests, bypassing the actual load_models call.
+    mocker.patch.dict("api.api.loaded_models", {"model": "mocked"}, clear=True)
     # Mock background worker thread target
     mocker.patch("api.api.background_worker_task")
-    # Mock models.unload_models during shutdown to avoid errors if it expects real models
+    # Mock models.unload_models during shutdown
     mocker.patch("api.models.unload_models")
 
 
