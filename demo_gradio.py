@@ -1,6 +1,7 @@
 from diffusers_helper.hf_login import login
 
 import os
+import re
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 import json
 import traceback
@@ -20,8 +21,8 @@ os.makedirs(temp_queue_images, exist_ok=True)
 
 # Default prompts
 DEFAULT_PROMPTS = [
-    {'prompt': 'The girl dances gracefully, with clear movements, full of charm.', 'length': 5.0},
-    {'prompt': 'A character doing some simple body movements.', 'length': 5.0},
+    {'prompt': 'The girl dances gracefully, with clear movements, full of charm.', 'n_prompt': '', 'length': 5.0, 'gs': 10.0},
+    {'prompt': 'A character doing some simple body movements.', 'n_prompt': '', 'length': 5.0, 'gs': 10.0},
 ]
 
 # Load existing prompts or create the file with defaults
@@ -43,6 +44,7 @@ import argparse
 import math
 
 from PIL import Image, ImageDraw, ImageFont
+from PIL.PngImagePlugin import PngInfo
 from diffusers import AutoencoderKLHunyuanVideo
 from transformers import LlamaModel, CLIPTextModel, LlamaTokenizerFast, CLIPTokenizer
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
@@ -69,6 +71,7 @@ class QueuedJob:
     cfg: float
     gs: float
     rs: float
+    n_prompt: str
     status: str = "pending"
     thumbnail: str = ""
     mp4_crf: float = 16
@@ -87,6 +90,7 @@ class QueuedJob:
                 'cfg': self.cfg,
                 'gs': self.gs,
                 'rs': self.rs,
+                'n_prompt': self.n_prompt, 
                 'status': self.status,
                 'thumbnail': self.thumbnail,
                 'mp4_crf': self.mp4_crf
@@ -110,6 +114,7 @@ class QueuedJob:
                 cfg=data['cfg'],
                 gs=data['gs'],
                 rs=data['rs'],
+                n_prompt=data['n_prompt'],
                 status=data['status'],
                 thumbnail=data['thumbnail'],
                 mp4_crf=data['mp4_crf']
@@ -162,8 +167,16 @@ job_queue = load_queue()
 def save_image_to_temp(image: np.ndarray, job_id: str) -> str:
     """Save image to temp directory and return the path"""
     try:
-        # Convert numpy array to PIL Image
-        pil_image = Image.fromarray(image)
+        # Handle Gallery tuple format
+        if isinstance(image, tuple):
+            image = image[0]  # Get the file path from the tuple
+        if isinstance(image, str):
+            # If it's a path, open the image
+            pil_image = Image.open(image)
+        else:
+            # If it's already a numpy array
+            pil_image = Image.fromarray(image)
+            
         # Create unique filename using hex ID
         filename = f"queue_image_{job_id}.png"
         filepath = os.path.join(temp_queue_images, filename)
@@ -175,7 +188,7 @@ def save_image_to_temp(image: np.ndarray, job_id: str) -> str:
         traceback.print_exc()
         return ""
 
-def add_to_queue(prompt, image, video_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, status="pending", mp4_crf=16):
+def add_to_queue(prompt, n_prompt, image, video_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, status="pending", mp4_crf=16):
     try:
         # Generate a unique hex ID for the job
         job_id = uuid.uuid4().hex[:8]
@@ -196,10 +209,20 @@ def add_to_queue(prompt, image, video_length, seed, use_teacache, gpu_memory_pre
             cfg=cfg,
             gs=gs,
             rs=rs,
+            n_prompt=n_prompt,
             status=status,
             mp4_crf=mp4_crf
         )
-        job_queue.append(job)
+        
+        # Find the first completed job to insert before
+        insert_index = len(job_queue)
+        for i, existing_job in enumerate(job_queue):
+            if existing_job.status == "completed":
+                insert_index = i
+                break
+        
+        # Insert the new job at the found index
+        job_queue.insert(insert_index, job)
         save_queue()  # Save immediately after adding
         return job_id
     except Exception as e:
@@ -243,7 +266,7 @@ def update_queue_display():
 
             # Add job data to display
             if job.thumbnail:
-                caption = f"{job.status}\n\nPrompt: {job.prompt}...\n\nLength: {job.video_length}s"
+                caption = f"{job.status}\n\nPrompt: {job.prompt} \n\n Negative: {job.n_prompt}\n\nLength: {job.video_length}s\nGS: {job.gs}"
                 queue_data.append((job.thumbnail, caption))
         
         return queue_data
@@ -256,27 +279,34 @@ def update_queue_display():
 def get_default_prompt():
     try:
         if quick_prompts and len(quick_prompts) > 0:
-            return quick_prompts[0]['prompt'], quick_prompts[0]['length']
-        return "", 5.0
+            return quick_prompts[0]['prompt'], quick_prompts[0]['n_prompt'], quick_prompts[0]['length'], quick_prompts[0].get('gs', 10.0)
+        return "", 5.0, 10.0
     except Exception as e:
         print(f"Error getting default prompt: {str(e)}")
-        return "", 5.0
+        return "", 5.0, 10.0
 
-def save_quick_prompt(prompt_text, video_length):
+def save_quick_prompt(prompt_text, n_prompt_text, video_length, gs_value):
     global quick_prompts
     if prompt_text:
         # Check if prompt already exists
         for item in quick_prompts:
             if item['prompt'] == prompt_text:
+                item['n_prompt'] = n_prompt_text
                 item['length'] = video_length
+                item['gs'] = gs_value
                 break
         else:
-            quick_prompts.append({'prompt': prompt_text, 'length': video_length})
+            quick_prompts.append({
+                'prompt': prompt_text,
+                'n_prompt': n_prompt_text,
+                'length': video_length,
+                'gs': gs_value
+            })
         
         with open(PROMPT_FILE, 'w') as f:
             json.dump(quick_prompts, f, indent=2)
     # Keep the text in the prompt box and set it as selected in quick list
-    return prompt_text, gr.update(choices=[item['prompt'] for item in quick_prompts], value=prompt_text), video_length
+    return prompt_text, n_prompt_text, gr.update(choices=[item['prompt'] for item in quick_prompts], value=prompt_text), video_length, gs_value
 
 def delete_quick_prompt(prompt_text):
     global quick_prompts
@@ -285,7 +315,7 @@ def delete_quick_prompt(prompt_text):
         with open(PROMPT_FILE, 'w') as f:
             json.dump(quick_prompts, f, indent=2)
     # Clear the prompt box and quick list selection
-    return "", gr.update(choices=[item['prompt'] for item in quick_prompts], value=None), 5.0
+    return "", "", gr.update(choices=[item['prompt'] for item in quick_prompts], value=None), 5.0, 10.0
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
@@ -357,6 +387,38 @@ stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
+def cleanup_old_videos(job_id: str, outputs_folder: str) -> None:
+    """
+    Deletes all '<job_id>_<n>.mp4' in outputs_folder except the one with the largest n.
+    """
+    # regex to grab the trailing number
+    pattern = re.compile(rf'^{re.escape(job_id)}_(\d+)\.mp4$')
+    candidates = []
+
+    # scan directory
+    for fname in os.listdir(outputs_folder):
+        m = pattern.match(fname)
+        if m:
+            frame_count = int(m.group(1))
+            candidates.append((frame_count, fname))
+
+    if not candidates:
+        return  # nothing to clean up
+
+    # find the highest frame-count
+    highest_count, _ = max(candidates, key=lambda x: x[0])
+
+    # delete all but the highest
+    for count, fname in candidates:
+        if count != highest_count:
+            path = os.path.join(outputs_folder, fname)
+            try:
+                os.remove(path)
+                print(f"Deleted old video: {fname}")
+            except OSError as e:
+                print(f"Failed to delete {fname}: {e}")
+
+
 
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
@@ -396,11 +458,40 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Image processing ...'))))
 
+        # Handle Gallery tuple format
+        if isinstance(input_image, tuple):
+            input_image = input_image[0]  # Get the file path from the tuple
+        if isinstance(input_image, str):
+            # If it's a path, open the image
+            input_image = np.array(Image.open(input_image))
+        elif isinstance(input_image, list):
+            # If it's a list of tuples, get the first one
+            if isinstance(input_image[0], tuple):
+                input_image = np.array(Image.open(input_image[0][0]))
+            else:
+                # If it's already a numpy array
+                input_image = input_image[0]
+
         H, W, C = input_image.shape
         height, width = find_nearest_bucket(H, W, resolution=640)
         input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
 
-        Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
+        # Save input image with metadata
+        metadata = PngInfo()
+        metadata.add_text("prompt", prompt)
+        metadata.add_text("negative_prompt", n_prompt) 
+        metadata.add_text("seed", str(seed))
+        metadata.add_text("length", str(total_second_length))
+        metadata.add_text("latent_window_size", str(latent_window_size))
+        metadata.add_text("steps", str(steps))
+        metadata.add_text("cfg", str(cfg))
+        metadata.add_text("gs", str(gs))
+        metadata.add_text("rs", str(rs))
+        metadata.add_text("gpu_memory_preservation", str(gpu_memory_preservation))
+        metadata.add_text("use_teacache", str(use_teacache))
+        metadata.add_text("mp4_crf", str(mp4_crf))
+
+        Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'), pnginfo=metadata)
 
         input_image_pt = torch.from_numpy(input_image_np).float() / 127.5 - 1
         input_image_pt = input_image_pt.permute(2, 0, 1)[None, :, None]
@@ -551,7 +642,6 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             if not high_vram:
                 unload_complete_models()
-
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
 
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=mp4_crf)
@@ -561,6 +651,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             stream.output_queue.push(('file', output_filename))
 
             if is_last_section:
+                cleanup_old_videos(job_id, outputs_folder)
                 break
     except:
         traceback.print_exc()
@@ -639,6 +730,12 @@ def mark_job_processing(job):
             )
             if new_thumbnail:
                 new_thumbnail.save(job.thumbnail)
+        
+        # Move job to top of queue
+        if job in job_queue:
+            job_queue.remove(job)
+            job_queue.insert(0, job)
+            save_queue()
             
     except Exception as e:
         print(f"Error modifying thumbnail: {str(e)}")
@@ -667,6 +764,12 @@ def mark_job_completed(job):
             )
             if new_thumbnail:
                 new_thumbnail.save(job.thumbnail)
+        
+        # Move job to bottom of queue
+        if job in job_queue:
+            job_queue.remove(job)
+            job_queue.append(job)  # Add to end of queue
+            save_queue()
             
     except Exception as e:
         print(f"Error modifying thumbnail: {str(e)}")
@@ -724,6 +827,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             status = "just_added" if i == 0 else "pending"  # First image gets just_added, rest get pending
             job_id = add_to_queue(
                 prompt=prompt,
+                n_prompt=n_prompt,
                 image=img,
                 video_length=total_second_length,
                 seed=seed,
@@ -770,6 +874,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             # Process input image
             job_id = add_to_queue(
                 prompt=prompt,
+                n_prompt=n_prompt,
                 image=input_image,
                 video_length=total_second_length,
                 seed=seed,
@@ -779,7 +884,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 cfg=cfg,
                 gs=gs,
                 rs=rs,
-                status="processing"
+                status="processing",
+                mp4_crf=mp4_crf
             )
             # Find and mark the new job as processing
             for job in job_queue:
@@ -876,6 +982,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
         if flag == 'end':
             # Find and mark all processing jobs as completed
+            #### delete mp4s
+            
             for job in job_queue:
                 if job.status == "processing":
                     mark_job_completed(job)
@@ -910,7 +1018,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                         raise
                     
                     # Process next job
-                    async_run(worker, next_image, next_job.prompt, n_prompt, next_job.seed, 
+                    async_run(worker, next_image, next_job.prompt, next_job.n_prompt, next_job.seed, 
                              next_job.video_length, latent_window_size, next_job.steps, 
                              next_job.cfg, next_job.gs, next_job.rs, 
                              next_job.gpu_memory_preservation, next_job.use_teacache, mp4_crf)
@@ -918,6 +1026,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                     job_queue[:] = [job for job in job_queue if job.status != "completed"]
                     save_queue()
                     # No more jobs, return to initial state
+                    cleanup_orphaned_files()
+
                     yield (
                         output_filename,  # result_video
                         gr.update(visible=False),  # preview_image
@@ -983,7 +1093,7 @@ def end_process():
         traceback.print_exc()
         return [], gr.update(interactive=True)  # queue_button (always enabled)
 
-def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, mp4_crf):
+def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, n_prompt, mp4_crf):
     """Handle adding a new job to the queue"""
     if input_image is None or not prompt:
         return [], gr.update(interactive=True)  # queue_button (always enabled)
@@ -1003,6 +1113,7 @@ def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_tea
             for img in input_images:
                 job_id = add_to_queue(
                     prompt=prompt,
+                    n_prompt=n_prompt,
                     image=img,
                     video_length=total_second_length,
                     seed=seed,
@@ -1027,6 +1138,7 @@ def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_tea
             # Add single image job
             job_id = add_to_queue(
                 prompt=prompt,
+                n_prompt=n_prompt,
                 image=input_image,
                 video_length=total_second_length,
                 seed=seed,
@@ -1130,6 +1242,25 @@ def delete_job(job_id):
         traceback.print_exc()
         return update_queue_display()
 
+def delete_all_jobs():
+    """Delete all jobs from the queue and their associated files"""
+    try:
+        # Delete all job files
+        for job in job_queue:
+            if os.path.exists(job.image_path):
+                os.remove(job.image_path)
+            if os.path.exists(job.thumbnail):
+                os.remove(job.thumbnail)
+        
+        # Clear the queue
+        job_queue.clear()
+        save_queue()
+        return update_queue_display()
+    except Exception as e:
+        print(f"Error deleting all jobs: {str(e)}")
+        traceback.print_exc()
+        return update_queue_display()
+
 # Add these calls at startup
 reset_processing_jobs()
 cleanup_orphaned_files()
@@ -1167,19 +1298,19 @@ with block:
                 object_fit="contain"
             )
             prompt = gr.Textbox(label="Prompt", value='')
-            save_prompt_button = gr.Button("Save Prompt")
-            delete_prompt_button = gr.Button("Delete Selected Prompt")
+            n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=True)
+            save_prompt_button = gr.Button("Save Prompt to Quick List")
             quick_list = gr.Dropdown(
                 label="Quick List",
                 choices=[item['prompt'] for item in quick_prompts],
                 value=quick_prompts[0]['prompt'] if quick_prompts else None,
                 allow_custom_value=True
             )
+            delete_prompt_button = gr.Button("Delete Selected Prompt from Quick List")
+
 
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
-
-                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)  # Not used
                 seed = gr.Number(label="Seed", value=31337, precision=0)
                 total_second_length = gr.Slider(label="Total Video Length (Seconds)", minimum=1, maximum=120, value=5, step=0.1)
                 latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)  # Should not change
@@ -1194,34 +1325,40 @@ with block:
                 mp4_crf = gr.Slider(label="MP4 Compression", minimum=0, maximum=100, value=16, step=1, info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs. ")
 
             # Set default prompt and length
-            default_prompt, default_length = get_default_prompt()
+            default_prompt, default_n_prompt, default_length, default_gs = get_default_prompt()
             prompt.value = default_prompt
+            n_prompt.value = default_n_prompt
             total_second_length.value = default_length
-
+            gs.value = default_gs
             save_prompt_button.click(
                 save_quick_prompt,
-                inputs=[prompt, total_second_length],
-                outputs=[prompt, quick_list, total_second_length],
+                inputs=[prompt, n_prompt, total_second_length, gs],
+                outputs=[prompt, n_prompt, quick_list, total_second_length, gs],
                 queue=False
             )
             delete_prompt_button.click(
                 delete_quick_prompt,
                 inputs=[quick_list],
-                outputs=[prompt, quick_list, total_second_length],
+                outputs=[prompt, n_prompt, quick_list, total_second_length, gs],
                 queue=False
             )
             quick_list.change(
-                lambda x: (x, next((item['length'] for item in quick_prompts if item['prompt'] == x), 5.0)) if x else ("", 5.0),
+                lambda x: (
+                    x, 
+                    next((item['n_prompt'] for item in quick_prompts if item['prompt'] == x), ""),
+                    next((item['length'] for item in quick_prompts if item['prompt'] == x), 5.0),
+                    next((item.get('gs', 10.0) for item in quick_prompts if item['prompt'] == x), 10.0)
+                ) if x else ("", "", 5.0, 10.0),
                 inputs=[quick_list],
-                outputs=[prompt, total_second_length],
+                outputs=[prompt, n_prompt, total_second_length, gs],
                 queue=False
             )
 
             # Add JavaScript to set default prompt on page load
             block.load(
-                fn=lambda: (default_prompt, default_length),
+                fn=lambda: (default_prompt, default_length, default_gs),
                 inputs=None,
-                outputs=[prompt, total_second_length],
+                outputs=[prompt, total_second_length, gs],
                 queue=False
             )
 
@@ -1248,6 +1385,14 @@ with block:
                 container=True
             )
 
+            # Add Delete All Jobs button
+            delete_all_button = gr.Button(value="Delete All Jobs", interactive=True)
+            delete_all_button.click(
+                fn=delete_all_jobs,
+                outputs=[queue_display],
+                queue=False
+            )
+
             # Load queue on startup
             block.load(
                 fn=update_queue_display,
@@ -1255,6 +1400,7 @@ with block:
                 outputs=[queue_display],
                 queue=False
             )
+
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
@@ -1270,7 +1416,7 @@ with block:
     )
     queue_button.click(
         fn=add_to_queue_handler,
-        inputs=[input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, mp4_crf],
+        inputs=[input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, n_prompt, mp4_crf],
         outputs=[queue_display, queue_button]
     )
 
