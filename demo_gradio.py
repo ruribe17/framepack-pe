@@ -518,9 +518,12 @@ def mark_job_processing(job):
             job_queue.insert(0, job)
             save_queue()
             
+        return update_queue_table(), update_queue_display()
+            
     except Exception as e:
         print(f"Error modifying thumbnail: {str(e)}")
         traceback.print_exc()
+        return gr.update(), gr.update()
 
 def mark_job_completed(job):
     """Mark a job as completed and update its thumbnail with a green border and DONE text"""
@@ -552,9 +555,12 @@ def mark_job_completed(job):
             job_queue.append(job)  # Add to end of queue
             save_queue()
             
+        return update_queue_table(), update_queue_display()
+            
     except Exception as e:
         print(f"Error modifying thumbnail: {str(e)}")
         traceback.print_exc()
+        return gr.update(), gr.update()
 
 def mark_job_pending(job):
     """Mark a job as pending and update its thumbnail to a clean version without border or text"""
@@ -581,9 +587,12 @@ def mark_job_pending(job):
             # Save clean thumbnail
             img.save(job.thumbnail)
             
+        return update_queue_table(), update_queue_display()
+            
     except Exception as e:
         print(f"Error modifying thumbnail: {str(e)}")
         traceback.print_exc()
+        return gr.update(), gr.update()
 
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, keep_temp_png, keep_temp_mp4):
@@ -883,7 +892,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         just_added_jobs = [job for job in job_queue if job.status == "just_added"]
         if just_added_jobs:
             next_job = just_added_jobs[0]
-            mark_job_processing(next_job)  # Use new function to mark as processing
+            queue_table_update, queue_display_update = mark_job_processing(next_job)
             save_queue()
             job_id = next_job.job_id
             
@@ -929,7 +938,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             # Find and mark the new job as processing
             for job in job_queue:
                 if job.job_id == job_id:
-                    mark_job_processing(job)
+                    queue_table_update, queue_display_update = mark_job_processing(job)
                     break
             process_image = input_image
             process_prompt = prompt
@@ -952,7 +961,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         
         # Process first pending job
         next_job = pending_jobs[0]
-        mark_job_processing(next_job)  # Use new function to mark as processing
+        queue_table_update, queue_display_update = mark_job_processing(next_job)  # Use new function to mark as processing
         save_queue()
         job_id = next_job.job_id
         
@@ -1032,8 +1041,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             
             for job in job_queue:
                 if job.status == "processing":
-                    mark_job_completed(job)
-                    save_queue()
+                    queue_table_update, queue_display_update = mark_job_pending(job)  # Use new function to mark as pending
                     break
 
             # Then check if we should continue processing (only if end button wasn't clicked)
@@ -1053,7 +1061,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
                 if next_job:
                     # Update next job status to processing
-                    mark_job_processing(next_job)  # Use new function to mark as processing
+                    queue_table_update, queue_display_update = mark_job_processing(next_job)
                     save_queue()
                     
                     try:
@@ -1121,7 +1129,7 @@ def end_process():
         # Then process all jobs
         for job in job_queue:
             if job.status == "processing":
-                mark_job_pending(job)  # Use new function to mark as pending
+                queue_table_update, queue_display_update = mark_job_pending(job)  # Use new function to mark as pending
                 jobs_changed += 1
         
         # If we found a processing job, move it to the top
