@@ -892,8 +892,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         if just_added_jobs:
             next_job = just_added_jobs[0]
             mark_job_processing(next_job)  # Use new function to mark as processing
-            update_queue_table(),  # queue_table
-            update_queue_display(),  # queue_display
+            update_queue_table()  # queue_table
+            update_queue_display()  # queue_display
             save_queue()
             job_id = next_job.job_id
             
@@ -965,8 +965,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         next_job = pending_jobs[0]
         mark_job_processing(next_job)  # Use new function to mark as processing
         save_queue()
-        update_queue_table(),  # queue_table
-        update_queue_display(),  # queue_display
+        update_queue_table()  # queue_table
+        update_queue_display()  # queue_display
         save_queue()
         job_id = next_job.job_id
         
@@ -1046,10 +1046,10 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             
             for job in job_queue:
                 if job.status == "processing":
-                    mark_job_pending(job)  # Use new function to mark as pending
+                    mark_job_completed(job)  # Use new function to mark as pending
                     save_queue()
-                    update_queue_table(),  # queue_table
-                    update_queue_display(),  # queue_display
+                    update_queue_table()  # queue_table
+                    update_queue_display()			# queue_display
                     break
 
             # Then check if we should continue processing (only if end button wasn't clicked)
@@ -1071,8 +1071,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                     # Update next job status to processing
                     mark_job_processing(next_job)
                     save_queue()
-                    update_queue_table(),  # queue_table
-                    update_queue_display(),  # queue_display
+                    update_queue_table()  # queue_table
+                    update_queue_display()  # queue_display
                     save_queue()
                     
                     try:
@@ -1142,8 +1142,8 @@ def end_process():
             if job.status == "processing":
                 mark_job_pending(job)  # Use new function to mark as pending
                 save_queue()
-                update_queue_table(),  # queue_table
-                update_queue_display(),  # queue_display
+                update_queue_table()  # queue_table
+                update_queue_display()  # queue_display
                 jobs_changed += 1
         
         # If we found a processing job, move it to the top
