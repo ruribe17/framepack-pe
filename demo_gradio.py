@@ -1375,25 +1375,25 @@ def update_queue_table():
         else:
             img_md = ""
 
-        prompt_display = (job.prompt[:77] + '...') if len(job.prompt) > 80 else job.prompt
-        prompt_title = job.prompt.replace('"', '&quot;')
-        prompt_cell = f'<span title="{prompt_title}">{prompt_display}</span>'
+        # Use full prompt text without truncation
+        prompt_cell = f'<span style="white-space: normal; word-wrap: break-word;">{job.prompt}</span>'
 
         data.append([
             img_md,           # Input thumbnail
+            "T",             # Top button
             "↑",             # Up button
             "↓",             # Down button
+            "B",             # Bottom button
             "×",             # Remove button
             job.status,      # Status
             f"{job.video_length:.1f}s",  # Length
-            job.steps,       # Steps
             prompt_cell,     # Prompt
             job.job_id       # ID
         ])
     return gr.DataFrame(value=data, visible=True, elem_classes=["gradio-dataframe"])
 
-def move_job(job_id, direction):
-    """Move a job up or down in the queue"""
+def move_job_to_top(job_id):
+    """Move a job to the top of the queue, maintaining processing job at top"""
     try:
         # Find the job's current index
         current_index = None
@@ -1405,16 +1405,100 @@ def move_job(job_id, direction):
         if current_index is None:
             return update_queue_table(), update_queue_display()
         
-        # Calculate new index
-        if direction == 'up' and current_index > 0:
-            new_index = current_index - 1
-        elif direction == 'down' and current_index < len(job_queue) - 1:
-            new_index = current_index + 1
-        else:
+        # Get the job
+        job = job_queue[current_index]
+        
+        # Remove from current position
+        job_queue.pop(current_index)
+        
+        # Find the first non-processing job
+        insert_index = 0
+        for i, existing_job in enumerate(job_queue):
+            if existing_job.status != "processing":
+                insert_index = i
+                break
+        
+        # Insert the job at the found index
+        job_queue.insert(insert_index, job)
+        save_queue()
+        
+        return update_queue_table(), update_queue_display()
+    except Exception as e:
+        print(f"Error moving job to top: {str(e)}")
+        traceback.print_exc()
+        return update_queue_table(), update_queue_display()
+
+def move_job_to_bottom(job_id):
+    """Move a job to the bottom of the queue, maintaining completed jobs at bottom"""
+    try:
+        # Find the job's current index
+        current_index = None
+        for i, job in enumerate(job_queue):
+            if job.job_id == job_id:
+                current_index = i
+                break
+        
+        if current_index is None:
             return update_queue_table(), update_queue_display()
         
-        # Swap jobs
-        job_queue[current_index], job_queue[new_index] = job_queue[new_index], job_queue[current_index]
+        # Get the job
+        job = job_queue[current_index]
+        
+        # Remove from current position
+        job_queue.pop(current_index)
+        
+        # Find the first completed job
+        insert_index = len(job_queue)
+        for i, existing_job in enumerate(job_queue):
+            if existing_job.status == "completed":
+                insert_index = i
+                break
+        
+        # Insert the job at the found index
+        job_queue.insert(insert_index, job)
+        save_queue()
+        
+        return update_queue_table(), update_queue_display()
+    except Exception as e:
+        print(f"Error moving job to bottom: {str(e)}")
+        traceback.print_exc()
+        return update_queue_table(), update_queue_display()
+
+def move_job(job_id, direction):
+    """Move a job up or down one position in the queue while maintaining sorting rules"""
+    try:
+        # Find the job's current index
+        current_index = None
+        for i, job in enumerate(job_queue):
+            if job.job_id == job_id:
+                current_index = i
+                break
+        
+        if current_index is None:
+            return update_queue_table(), update_queue_display()
+        
+        # Get the job
+        job = job_queue[current_index]
+        
+        # Calculate new index based on direction and sorting rules
+        if direction == 'up':
+            # Find the previous non-processing job
+            new_index = current_index - 1
+            while new_index >= 0 and job_queue[new_index].status == "processing":
+                new_index -= 1
+            if new_index < 0:
+                return update_queue_table(), update_queue_display()
+        else:  # direction == 'down'
+            # Find the next non-completed job
+            new_index = current_index + 1
+            while new_index < len(job_queue) and job_queue[new_index].status == "completed":
+                new_index += 1
+            if new_index >= len(job_queue):
+                return update_queue_table(), update_queue_display()
+        
+        # Remove from current position and insert at new position
+        job_queue.pop(current_index)
+        job_queue.insert(new_index, job)
         save_queue()
         
         return update_queue_table(), update_queue_display()
@@ -1424,29 +1508,28 @@ def move_job(job_id, direction):
         return update_queue_table(), update_queue_display()
 
 def remove_job(job_id):
-    """Remove a job from the queue"""
+    """Delete a job from the queue and its associated files"""
     try:
-        # Find and remove job
-        for i, job in enumerate(job_queue):
+        # Find and remove job from queue
+        for job in job_queue:
             if job.job_id == job_id:
                 # Delete associated files
                 if os.path.exists(job.image_path):
                     os.remove(job.image_path)
                 if os.path.exists(job.thumbnail):
                     os.remove(job.thumbnail)
-                job_queue.pop(i)
+                job_queue.remove(job)
                 break
-        
         save_queue()
         return update_queue_table(), update_queue_display()
     except Exception as e:
-        print(f"Error removing job: {str(e)}")
+        print(f"Error deleting job: {str(e)}")
         traceback.print_exc()
         return update_queue_table(), update_queue_display()
 
 def handle_queue_action(evt: gr.SelectData):
     """Handle queue action button clicks"""
-    if evt.index is None or evt.value not in ["↑", "↓", "×"]:
+    if evt.index is None or evt.value not in ["T", "↑", "↓", "B", "×"]:
         return update_queue_table(), update_queue_display()
     
     row_index, col_index = evt.index
@@ -1455,10 +1538,14 @@ def handle_queue_action(evt: gr.SelectData):
     # Get the job ID from the first column
     job_id = job_queue[row_index].job_id
     
-    if button_clicked == "↑":
+    if button_clicked == "T":
+        return move_job_to_top(job_id)
+    elif button_clicked == "↑":
         return move_job(job_id, 'up')
     elif button_clicked == "↓":
         return move_job(job_id, 'down')
+    elif button_clicked == "B":
+        return move_job_to_bottom(job_id)
     elif button_clicked == "×":
         return remove_job(job_id)
     
@@ -1487,11 +1574,33 @@ css = make_progress_bar_css() + """
 /* DataFrame styles */
 .gradio-dataframe {
     width: 100% !important;
+    height: 1000px !important;  /* Increased height */
+    overflow-y: auto !important;
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+}
+.gradio-dataframe > div {
+    height: 100% !important;
+}
+.gradio-dataframe > div > div {
+    height: 100% !important;
+}
+.gradio-dataframe > div > div > div {
+    height: 100% !important;
+}
+.gradio-dataframe table {
+    height: 100% !important;
+}
+.gradio-dataframe tbody {
+    height: 100% !important;
+}
+.gradio-dataframe tr {
+    height: auto !important;
 }
 .gradio-dataframe th:first-child,
 .gradio-dataframe td:first-child {
-    width: 200px !important;
-    min-width: 200px !important;
+    width: 150px !important;
+    min-width: 150px !important;
 }
 /* Remove orange selection highlight */
 .gradio-dataframe td.selected,
@@ -1505,7 +1614,9 @@ css = make_progress_bar_css() + """
 /* Style the arrow buttons */
 .gradio-dataframe td:nth-child(2),
 .gradio-dataframe td:nth-child(3),
-.gradio-dataframe td:nth-child(4) {
+.gradio-dataframe td:nth-child(4),
+.gradio-dataframe td:nth-child(5),
+.gradio-dataframe td:nth-child(6) {
     cursor: pointer;
     color: #666;
     font-weight: bold;
@@ -1513,8 +1624,30 @@ css = make_progress_bar_css() + """
 }
 .gradio-dataframe td:nth-child(2):hover,
 .gradio-dataframe td:nth-child(3):hover,
-.gradio-dataframe td:nth-child(4):hover {
+.gradio-dataframe td:nth-child(4):hover,
+.gradio-dataframe td:nth-child(5):hover,
+.gradio-dataframe td:nth-child(6):hover {
     color: #000;
+}
+/* Make prompt text wrap */
+.gradio-dataframe td:nth-child(9) {
+    max-width: 300px !important;
+    white-space: normal !important;
+    word-wrap: break-word !important;
+}
+/* Force accordion to be closed by default */
+.gradio-accordion {
+    display: none !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+.gradio-accordion.open {
+    display: block !important;
+}
+/* Remove extra spacing */
+.gradio-block {
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
 }
 """
 block = gr.Blocks(css=css).queue()
@@ -1610,27 +1743,27 @@ with block:
             # Add queue display
             gr.Markdown("### Queuing Order")
             queue_table = gr.DataFrame(
-                headers=["Input", "", "", "", "Status", "Length", "Steps", "Prompt", "ID"],
-                datatype=["markdown", "str", "str", "str", "str", "str", "number", "markdown", "number"],
-                col_count=(9, "fixed"),
+                headers=["Input", "T", "↑", "↓", "B", "×", "Status", "Length", "Prompt", "ID"],
+                datatype=["markdown", "str", "str", "str", "str", "str", "str", "str", "markdown", "number"],
+                col_count=(10, "fixed"),
                 value=[],
                 interactive=False,
-                visible=True,  # Make it visible by default
-                elem_classes=["gradio-dataframe"]  # Add custom class for styling
+                visible=True,
+                elem_classes=["gradio-dataframe"]
             )
 
-            # Add back the original queue gallery
-            gr.Markdown("### Queue Preview")
-            queue_display = gr.Gallery(
-                label="Job Queue Gallery",
-                show_label=True,
-                columns=3,
-                object_fit="contain",
-                elem_classes=["queue-gallery"],
-                allow_preview=True,
-                show_download_button=False,
-                container=True
-            )
+            # Add back the original queue gallery in a collapsible accordion
+            with gr.Accordion("Queue Preview", open=False):
+                queue_display = gr.Gallery(
+                    label="Job Queue Gallery",
+                    show_label=True,
+                    columns=3,
+                    object_fit="contain",
+                    elem_classes=["queue-gallery"],
+                    allow_preview=True,
+                    show_download_button=False,
+                    container=True
+                )
 
             # Add Delete All Jobs button
             delete_all_button = gr.Button(value="Delete All Jobs", interactive=True)
