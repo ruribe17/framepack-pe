@@ -80,13 +80,13 @@ https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install
 * Build the image
 
 ```
-docker build -t frame-pack .
+docker build -t frame-pack --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) .
 ```
 
 * Run a container
 
 ```
-docker run -p 7860:7860 --gpus all -v $(pwd):/app --name frame-pack-container --rm frame-pack
+docker run -p 7860:7860 --gpus all -v $(pwd):/app  --name frame-pack-container --rm frame-pack
 ```
 
 Connect to the gradio demo with a web browser on http://localhost:7860

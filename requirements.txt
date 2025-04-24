@@ -16,3 +16,4 @@ safetensors
 
 xformers
 sageattention
+flash-attn
