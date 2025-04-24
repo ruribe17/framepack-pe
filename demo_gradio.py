@@ -170,7 +170,6 @@ def load_queue():
 # Load existing queue on startup
 job_queue = load_queue()
 
-
 def save_image_to_temp(image: np.ndarray, job_id: str) -> str:
     """Save image to temp directory and return the path"""
     try:
@@ -892,7 +891,10 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         just_added_jobs = [job for job in job_queue if job.status == "just_added"]
         if just_added_jobs:
             next_job = just_added_jobs[0]
-            queue_table_update, queue_display_update = mark_job_processing(next_job)
+            mark_job_processing(next_job)  # Use new function to mark as processing
+            update_queue_table(),  # queue_table
+            update_queue_display(),  # queue_display
+            # queue_table_update, queue_display_update = mark_job_processing(next_job)
             save_queue()
             job_id = next_job.job_id
             
@@ -938,7 +940,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             # Find and mark the new job as processing
             for job in job_queue:
                 if job.job_id == job_id:
-                    queue_table_update, queue_display_update = mark_job_processing(job)
+                    mark_job_processing(job)
                     break
             process_image = input_image
             process_prompt = prompt
@@ -961,7 +963,9 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         
         # Process first pending job
         next_job = pending_jobs[0]
-        queue_table_update, queue_display_update = mark_job_processing(next_job)  # Use new function to mark as processing
+        mark_job_processing(next_job)  # Use new function to mark as processing
+        update_queue_table(),  # queue_table
+        update_queue_display(),  # queue_display
         save_queue()
         job_id = next_job.job_id
         
@@ -1041,7 +1045,9 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             
             for job in job_queue:
                 if job.status == "processing":
-                    queue_table_update, queue_display_update = mark_job_pending(job)  # Use new function to mark as pending
+                    mark_job_pending(job)  # Use new function to mark as pending
+                    update_queue_table(),  # queue_table
+                    update_queue_display(),  # queue_display
                     break
 
             # Then check if we should continue processing (only if end button wasn't clicked)
@@ -1061,7 +1067,9 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
                 if next_job:
                     # Update next job status to processing
-                    queue_table_update, queue_display_update = mark_job_processing(next_job)
+                    mark_job_processing(next_job)
+                    update_queue_table(),  # queue_table
+                    update_queue_display(),  # queue_display
                     save_queue()
                     
                     try:
@@ -1129,7 +1137,9 @@ def end_process():
         # Then process all jobs
         for job in job_queue:
             if job.status == "processing":
-                queue_table_update, queue_display_update = mark_job_pending(job)  # Use new function to mark as pending
+                mark_job_pending(job)  # Use new function to mark as pending
+                update_queue_table(),  # queue_table
+                update_queue_display(),  # queue_display
                 jobs_changed += 1
         
         # If we found a processing job, move it to the top
@@ -1714,7 +1724,7 @@ def reset_processing_jobs():
 
 # Add these calls at startup
 reset_processing_jobs()
-cleanup_orphaned_files()		
+cleanup_orphaned_files()        
 
 
 block.launch(
