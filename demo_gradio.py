@@ -894,7 +894,6 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             mark_job_processing(next_job)  # Use new function to mark as processing
             update_queue_table(),  # queue_table
             update_queue_display(),  # queue_display
-            # queue_table_update, queue_display_update = mark_job_processing(next_job)
             save_queue()
             job_id = next_job.job_id
             
@@ -941,6 +940,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             for job in job_queue:
                 if job.job_id == job_id:
                     mark_job_processing(job)
+					save_queue()
                     break
             process_image = input_image
             process_prompt = prompt
@@ -964,6 +964,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         # Process first pending job
         next_job = pending_jobs[0]
         mark_job_processing(next_job)  # Use new function to mark as processing
+		save_queue()
         update_queue_table(),  # queue_table
         update_queue_display(),  # queue_display
         save_queue()
@@ -1046,6 +1047,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
             for job in job_queue:
                 if job.status == "processing":
                     mark_job_pending(job)  # Use new function to mark as pending
+                    save_queue()
                     update_queue_table(),  # queue_table
                     update_queue_display(),  # queue_display
                     break
@@ -1068,6 +1070,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 if next_job:
                     # Update next job status to processing
                     mark_job_processing(next_job)
+					save_queue()
                     update_queue_table(),  # queue_table
                     update_queue_display(),  # queue_display
                     save_queue()
@@ -1138,6 +1141,7 @@ def end_process():
         for job in job_queue:
             if job.status == "processing":
                 mark_job_pending(job)  # Use new function to mark as pending
+				save_queue()
                 update_queue_table(),  # queue_table
                 update_queue_display(),  # queue_display
                 jobs_changed += 1
@@ -1278,6 +1282,7 @@ def reset_processing_jobs():
         for job in jobs_to_move:
             job_queue.remove(job)
             mark_job_pending(job)  # Use new function to mark as pending
+			save_queue()
             print(f"Changed job {job.job_id} status to pending")
         
         # Add them back at the top in reverse order (so they maintain their relative order)
@@ -1708,6 +1713,7 @@ def reset_processing_jobs():
         for job in jobs_to_move:
             job_queue.remove(job)
             mark_job_pending(job)  # Use new function to mark as pending
+			save_queue()
             print(f"Changed job {job.job_id} status to pending")
         
         # Add them back at the top in reverse order (so they maintain their relative order)
