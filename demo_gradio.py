@@ -170,6 +170,7 @@ def load_queue():
 # Load existing queue on startup
 job_queue = load_queue()
 
+
 def save_image_to_temp(image: np.ndarray, job_id: str) -> str:
     """Save image to temp directory and return the path"""
     try:
@@ -431,7 +432,7 @@ def clean_up_temp_mp4png(job_id: str, outputs_folder: str, keep_temp_png: bool =
     if not candidates:
         return  # nothing to clean up
 
-    # find the highest frame-count
+    # find the highest frame‐count
     highest_count, _ = max(candidates, key=lambda x: x[0])
 
     # delete all but the highest
@@ -445,6 +446,144 @@ def clean_up_temp_mp4png(job_id: str, outputs_folder: str, keep_temp_png: bool =
                 print(f"Failed to delete {fname}: {e}")
 
 
+def create_status_thumbnail(image_path, status, border_color, status_text):
+    """Create a thumbnail with status-specific border and text"""
+    try:
+        # Load and resize image for thumbnail
+        img = Image.open(image_path)
+        width, height = img.size
+        new_height = 200
+        new_width = int((new_height / height) * width)
+        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Add border
+        border_size = 5
+        img_with_border = Image.new('RGB', 
+            (img.width + border_size*2, img.height + border_size*2), 
+            border_color)
+        img_with_border.paste(img, (border_size, border_size))
+        
+        # Add status text
+        draw = ImageDraw.Draw(img_with_border)
+        # Use smaller font size for RUNNING text
+        font_size = 30 if status_text == "RUNNING" else 40
+        font = ImageFont.truetype("arial.ttf", font_size)  # You might need to adjust font path
+        text = status_text
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        
+        # Position text in center
+        x = (img_with_border.width - text_width) // 2
+        y = (img_with_border.height - text_height) // 2
+        
+        # Draw text with black outline
+        for offset in [(-1,-1), (-1,1), (1,-1), (1,1)]:
+            draw.text((x+offset[0], y+offset[1]), text, font=font, fill=(0,0,0))
+        draw.text((x, y), text, font=font, fill=(255,255,255))
+        
+        return img_with_border
+    except Exception as e:
+        print(f"Error creating status thumbnail: {str(e)}")
+        traceback.print_exc()
+        return None
+
+def mark_job_processing(job):
+    """Mark a job as processing and update its thumbnail with a red border and RUNNING text"""
+    try:
+        job.status = "processing"
+        
+        # Delete existing thumbnail if it exists
+        if job.thumbnail and os.path.exists(job.thumbnail):
+            os.remove(job.thumbnail)
+        
+        # Create new thumbnail with processing status
+        if job.image_path and os.path.exists(job.image_path):
+            # Create thumbnail path if it doesn't exist
+            if not job.thumbnail:
+                job.thumbnail = os.path.join(temp_queue_images, f"thumb_{job.job_id}.png")
+            
+            new_thumbnail = create_status_thumbnail(
+                job.image_path,
+                "processing",
+                (255, 0, 0),  # Red color
+                "RUNNING"
+            )
+            if new_thumbnail:
+                new_thumbnail.save(job.thumbnail)
+        
+        # Move job to top of queue
+        if job in job_queue:
+            job_queue.remove(job)
+            job_queue.insert(0, job)
+            save_queue()
+            
+    except Exception as e:
+        print(f"Error modifying thumbnail: {str(e)}")
+        traceback.print_exc()
+
+def mark_job_completed(job):
+    """Mark a job as completed and update its thumbnail with a green border and DONE text"""
+    try:
+        job.status = "completed"
+        
+        # Delete existing thumbnail if it exists
+        if job.thumbnail and os.path.exists(job.thumbnail):
+            os.remove(job.thumbnail)
+        
+        # Create new thumbnail with completed status
+        if job.image_path and os.path.exists(job.image_path):
+            # Create thumbnail path if it doesn't exist
+            if not job.thumbnail:
+                job.thumbnail = os.path.join(temp_queue_images, f"thumb_{job.job_id}.png")
+            
+            new_thumbnail = create_status_thumbnail(
+                job.image_path,
+                "completed",
+                (0, 255, 0),  # Green color
+                "DONE"
+            )
+            if new_thumbnail:
+                new_thumbnail.save(job.thumbnail)
+        
+        # Move job to bottom of queue
+        if job in job_queue:
+            job_queue.remove(job)
+            job_queue.append(job)  # Add to end of queue
+            save_queue()
+            
+    except Exception as e:
+        print(f"Error modifying thumbnail: {str(e)}")
+        traceback.print_exc()
+
+def mark_job_pending(job):
+    """Mark a job as pending and update its thumbnail to a clean version without border or text"""
+    try:
+        job.status = "pending"
+        
+        # Delete existing thumbnail if it exists
+        if job.thumbnail and os.path.exists(job.thumbnail):
+            os.remove(job.thumbnail)
+        
+        # Create new clean thumbnail
+        if job.image_path and os.path.exists(job.image_path):
+            # Create thumbnail path if it doesn't exist
+            if not job.thumbnail:
+                job.thumbnail = os.path.join(temp_queue_images, f"thumb_{job.job_id}.png")
+            
+            # Load and resize image for thumbnail
+            img = Image.open(job.image_path)
+            width, height = img.size
+            new_height = 200
+            new_width = int((new_height / height) * width)
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Save clean thumbnail
+            img.save(job.thumbnail)
+            
+    except Exception as e:
+        print(f"Error modifying thumbnail: {str(e)}")
+        traceback.print_exc()
 
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, keep_temp_png, keep_temp_mp4):
@@ -693,144 +832,6 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     return
 
 
-def create_status_thumbnail(image_path, status, border_color, status_text):
-    """Create a thumbnail with status-specific border and text"""
-    try:
-        # Load and resize image for thumbnail
-        img = Image.open(image_path)
-        width, height = img.size
-        new_height = 200
-        new_width = int((new_height / height) * width)
-        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        
-        # Add border
-        border_size = 5
-        img_with_border = Image.new('RGB', 
-            (img.width + border_size*2, img.height + border_size*2), 
-            border_color)
-        img_with_border.paste(img, (border_size, border_size))
-        
-        # Add status text
-        draw = ImageDraw.Draw(img_with_border)
-        # Use smaller font size for RUNNING text
-        font_size = 30 if status_text == "RUNNING" else 40
-        font = ImageFont.truetype("arial.ttf", font_size)  # You might need to adjust font path
-        text = status_text
-        text_bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
-        
-        # Position text in center
-        x = (img_with_border.width - text_width) // 2
-        y = (img_with_border.height - text_height) // 2
-        
-        # Draw text with black outline
-        for offset in [(-1,-1), (-1,1), (1,-1), (1,1)]:
-            draw.text((x+offset[0], y+offset[1]), text, font=font, fill=(0,0,0))
-        draw.text((x, y), text, font=font, fill=(255,255,255))
-        
-        return img_with_border
-    except Exception as e:
-        print(f"Error creating status thumbnail: {str(e)}")
-        traceback.print_exc()
-        return None
-
-def mark_job_processing(job):
-    """Mark a job as processing and update its thumbnail with a red border and RUNNING text"""
-    try:
-        job.status = "processing"
-        
-        # Delete existing thumbnail if it exists
-        if job.thumbnail and os.path.exists(job.thumbnail):
-            os.remove(job.thumbnail)
-        
-        # Create new thumbnail with processing status
-        if job.image_path and os.path.exists(job.image_path):
-            # Create thumbnail path if it doesn't exist
-            if not job.thumbnail:
-                job.thumbnail = os.path.join(temp_queue_images, f"thumb_{job.job_id}.png")
-            
-            new_thumbnail = create_status_thumbnail(
-                job.image_path,
-                "processing",
-                (255, 0, 0),  # Red color
-                "RUNNING"
-            )
-            if new_thumbnail:
-                new_thumbnail.save(job.thumbnail)
-        
-        # Move job to top of queue
-        if job in job_queue:
-            job_queue.remove(job)
-            job_queue.insert(0, job)
-            save_queue()
-            
-    except Exception as e:
-        print(f"Error modifying thumbnail: {str(e)}")
-        traceback.print_exc()
-
-def mark_job_completed(job):
-    """Mark a job as completed and update its thumbnail with a green border and DONE text"""
-    try:
-        job.status = "completed"
-        
-        # Delete existing thumbnail if it exists
-        if job.thumbnail and os.path.exists(job.thumbnail):
-            os.remove(job.thumbnail)
-        
-        # Create new thumbnail with completed status
-        if job.image_path and os.path.exists(job.image_path):
-            # Create thumbnail path if it doesn't exist
-            if not job.thumbnail:
-                job.thumbnail = os.path.join(temp_queue_images, f"thumb_{job.job_id}.png")
-            
-            new_thumbnail = create_status_thumbnail(
-                job.image_path,
-                "completed",
-                (0, 255, 0),  # Green color
-                "DONE"
-            )
-            if new_thumbnail:
-                new_thumbnail.save(job.thumbnail)
-        
-        # Move job to bottom of queue
-        if job in job_queue:
-            job_queue.remove(job)
-            job_queue.append(job)  # Add to end of queue
-            save_queue()
-            
-    except Exception as e:
-        print(f"Error modifying thumbnail: {str(e)}")
-        traceback.print_exc()
-
-def mark_job_pending(job):
-    """Mark a job as pending and update its thumbnail to a clean version without border or text"""
-    try:
-        job.status = "pending"
-        
-        # Delete existing thumbnail if it exists
-        if job.thumbnail and os.path.exists(job.thumbnail):
-            os.remove(job.thumbnail)
-        
-        # Create new clean thumbnail
-        if job.image_path and os.path.exists(job.image_path):
-            # Create thumbnail path if it doesn't exist
-            if not job.thumbnail:
-                job.thumbnail = os.path.join(temp_queue_images, f"thumb_{job.job_id}.png")
-            
-            # Load and resize image for thumbnail
-            img = Image.open(job.image_path)
-            width, height = img.size
-            new_height = 200
-            new_width = int((new_height / height) * width)
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            
-            # Save clean thumbnail
-            img.save(job.thumbnail)
-            
-    except Exception as e:
-        print(f"Error modifying thumbnail: {str(e)}")
-        traceback.print_exc()
 
 def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, keep_temp_png, keep_temp_mp4):
     print(f"process called with keep_temp_png={keep_temp_png}, keep_temp_mp4={keep_temp_mp4}")
@@ -1130,18 +1131,19 @@ def end_process():
         
         save_queue()
         return (
+            update_queue_table(),  # queue_table
             update_queue_display(),  # queue_display
             gr.update(interactive=True)  # queue_button (always enabled)
         )
     except Exception as e:
         print(f"Error in end_process: {str(e)}")
         traceback.print_exc()
-        return [], gr.update(interactive=True)  # queue_button (always enabled)
+        return gr.update(), gr.update(), gr.update(interactive=True)  # queue_button (always enabled)
 
 def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, n_prompt, mp4_crf, keep_temp_png, keep_temp_mp4):
     """Handle adding a new job to the queue"""
     if input_image is None or not prompt:
-        return [], gr.update(interactive=True)  # queue_button (always enabled)
+        return gr.update(), gr.update(interactive=True), gr.update(interactive=True)  # queue_button (always enabled)
     
     try:
         # Convert Gallery tuples to numpy arrays if needed
@@ -1203,13 +1205,13 @@ def add_to_queue_handler(input_image, prompt, total_second_length, seed, use_tea
         
         if job_id is not None:
             save_queue()  # Save after changing statuses
-            return update_queue_display(), gr.update(interactive=True)  # queue_button (always enabled)
+            return update_queue_table(), update_queue_display(), gr.update(interactive=True)  # queue_button (always enabled)
         else:
-            return [], gr.update(interactive=True)  # queue_button (always enabled)
+            return gr.update(), gr.update(), gr.update(interactive=True)  # queue_button (always enabled)
     except Exception as e:
         print(f"Error in add_to_queue_handler: {str(e)}")
         traceback.print_exc()
-        return [], gr.update(interactive=True)  # queue_button (always enabled)
+        return gr.update(), gr.update(), gr.update(interactive=True)  # queue_button (always enabled)
 
 def cleanup_orphaned_files():
     """Clean up any temp files that don't correspond to jobs in the queue"""
@@ -1243,7 +1245,7 @@ def cleanup_orphaned_files():
         traceback.print_exc()
 
 def reset_processing_jobs():
-    """Reset any processing or just_added jobs to pending and move them to top of queue"""
+    """Reset any processing to pending and move them to top of queue"""
     job_queue[:] = [job for job in job_queue if job.status != "completed"]
     try:
         print("\n=== DEBUG: Reset Processing Jobs Called ===")
@@ -1310,9 +1312,129 @@ def delete_all_jobs():
         traceback.print_exc()
         return update_queue_display()
 
-# Add these calls at startup
-reset_processing_jobs()
-cleanup_orphaned_files()
+def update_queue_table():
+    """Update the queue table display with current jobs"""
+    data = []
+    for job in job_queue:
+        # Create thumbnail if it doesn't exist
+        if not job.thumbnail and job.image_path:
+            try:
+                # Load and resize image for thumbnail
+                img = Image.open(job.image_path)
+                width, height = img.size
+                new_height = 200
+                new_width = int((new_height / height) * width)
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                thumb_path = os.path.join(temp_queue_images, f"thumb_{job.job_id}.png")
+                img.save(thumb_path)
+                job.thumbnail = thumb_path
+                save_queue()
+            except Exception as e:
+                print(f"Error creating thumbnail: {str(e)}")
+                job.thumbnail = ""
+
+        # Add job data to display
+        if job.thumbnail:
+            try:
+                # Read the image and convert to base64
+                with open(job.thumbnail, "rb") as img_file:
+                    import base64
+                    img_data = base64.b64encode(img_file.read()).decode()
+                img_md = f'<img src="data:image/png;base64,{img_data}" alt="Input" style="max-width:150px; max-height:150px; display: block; margin: auto; object-fit: contain; transform: scale(0.75); transform-origin: top left;" />'
+            except Exception as e:
+                print(f"Error converting image to base64: {str(e)}")
+                img_md = ""
+        else:
+            img_md = ""
+
+        prompt_display = (job.prompt[:77] + '...') if len(job.prompt) > 80 else job.prompt
+        prompt_title = job.prompt.replace('"', '&quot;')
+        prompt_cell = f'<span title="{prompt_title}">{prompt_display}</span>'
+
+        data.append([
+            img_md,           # Input thumbnail
+            "↑",             # Up button
+            "↓",             # Down button
+            "×",             # Remove button
+            job.status,      # Status
+            f"{job.video_length:.1f}s",  # Length
+            job.steps,       # Steps
+            prompt_cell,     # Prompt
+            job.job_id       # ID
+        ])
+    return gr.DataFrame(value=data, visible=True, elem_classes=["gradio-dataframe"])
+
+def move_job(job_id, direction):
+    """Move a job up or down in the queue"""
+    try:
+        # Find the job's current index
+        current_index = None
+        for i, job in enumerate(job_queue):
+            if job.job_id == job_id:
+                current_index = i
+                break
+        
+        if current_index is None:
+            return update_queue_table(), update_queue_display()
+        
+        # Calculate new index
+        if direction == 'up' and current_index > 0:
+            new_index = current_index - 1
+        elif direction == 'down' and current_index < len(job_queue) - 1:
+            new_index = current_index + 1
+        else:
+            return update_queue_table(), update_queue_display()
+        
+        # Swap jobs
+        job_queue[current_index], job_queue[new_index] = job_queue[new_index], job_queue[current_index]
+        save_queue()
+        
+        return update_queue_table(), update_queue_display()
+    except Exception as e:
+        print(f"Error moving job: {str(e)}")
+        traceback.print_exc()
+        return update_queue_table(), update_queue_display()
+
+def remove_job(job_id):
+    """Remove a job from the queue"""
+    try:
+        # Find and remove job
+        for i, job in enumerate(job_queue):
+            if job.job_id == job_id:
+                # Delete associated files
+                if os.path.exists(job.image_path):
+                    os.remove(job.image_path)
+                if os.path.exists(job.thumbnail):
+                    os.remove(job.thumbnail)
+                job_queue.pop(i)
+                break
+        
+        save_queue()
+        return update_queue_table(), update_queue_display()
+    except Exception as e:
+        print(f"Error removing job: {str(e)}")
+        traceback.print_exc()
+        return update_queue_table(), update_queue_display()
+
+def handle_queue_action(evt: gr.SelectData):
+    """Handle queue action button clicks"""
+    if evt.index is None or evt.value not in ["↑", "↓", "×"]:
+        return update_queue_table(), update_queue_display()
+    
+    row_index, col_index = evt.index
+    button_clicked = evt.value
+    
+    # Get the job ID from the first column
+    job_id = job_queue[row_index].job_id
+    
+    if button_clicked == "↑":
+        return move_job(job_id, 'up')
+    elif button_clicked == "↓":
+        return move_job(job_id, 'down')
+    elif button_clicked == "×":
+        return remove_job(job_id)
+    
+    return update_queue_table(), update_queue_display()
 
 # Add custom CSS for the queue display
 css = make_progress_bar_css() + """
@@ -1333,6 +1455,38 @@ css = make_progress_bar_css() + """
 }
 .queue-gallery .gallery-item {
     margin: 5px;
+}
+/* DataFrame styles */
+.gradio-dataframe {
+    width: 100% !important;
+}
+.gradio-dataframe th:first-child,
+.gradio-dataframe td:first-child {
+    width: 200px !important;
+    min-width: 200px !important;
+}
+/* Remove orange selection highlight */
+.gradio-dataframe td.selected,
+.gradio-dataframe td:focus,
+.gradio-dataframe tr.selected td,
+.gradio-dataframe tr:focus td {
+    background-color: transparent !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+/* Style the arrow buttons */
+.gradio-dataframe td:nth-child(2),
+.gradio-dataframe td:nth-child(3),
+.gradio-dataframe td:nth-child(4) {
+    cursor: pointer;
+    color: #666;
+    font-weight: bold;
+    transition: color 0.2s;
+}
+.gradio-dataframe td:nth-child(2):hover,
+.gradio-dataframe td:nth-child(3):hover,
+.gradio-dataframe td:nth-child(4):hover {
+    color: #000;
 }
 """
 block = gr.Blocks(css=css).queue()
@@ -1425,8 +1579,22 @@ with block:
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
             
+            # Add queue display
+            gr.Markdown("### Queuing Order")
+            queue_table = gr.DataFrame(
+                headers=["Input", "", "", "", "Status", "Length", "Steps", "Prompt", "ID"],
+                datatype=["markdown", "str", "str", "str", "str", "str", "number", "markdown", "number"],
+                col_count=(9, "fixed"),
+                value=[],
+                interactive=False,
+                visible=True,  # Make it visible by default
+                elem_classes=["gradio-dataframe"]  # Add custom class for styling
+            )
+
+            # Add back the original queue gallery
+            gr.Markdown("### Queue Preview")
             queue_display = gr.Gallery(
-                label="Job Queue",
+                label="Job Queue Gallery",
                 show_label=True,
                 columns=3,
                 object_fit="contain",
@@ -1446,12 +1614,14 @@ with block:
 
             # Load queue on startup
             block.load(
-                fn=update_queue_display,
+                fn=lambda: (update_queue_table(), update_queue_display()),
                 inputs=None,
-                outputs=[queue_display],
+                outputs=[queue_table, queue_display],
                 queue=False
             )
 
+    # Connect queue actions
+    queue_table.select(fn=handle_queue_action, inputs=[], outputs=[queue_table, queue_display])
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
@@ -1463,13 +1633,81 @@ with block:
     )
     end_button.click(
         fn=end_process,
-        outputs=[queue_display, queue_button]
+        outputs=[queue_table, queue_display, queue_button]
     )
     queue_button.click(
         fn=add_to_queue_handler,
         inputs=[input_image, prompt, total_second_length, seed, use_teacache, gpu_memory_preservation, steps, cfg, gs, rs, n_prompt, mp4_crf, keep_temp_png, keep_temp_mp4],
-        outputs=[queue_display, queue_button]
+        outputs=[queue_table, queue_display, queue_button]
     )
+
+# Add these calls at startup
+
+def cleanup_orphaned_files():
+    """Clean up any temp files that don't correspond to jobs in the queue"""
+    try:
+        # Get all job files from queue
+        job_files = set()
+        for job in job_queue:
+            if job.image_path:
+                job_files.add(job.image_path)
+            if job.thumbnail:
+                job_files.add(job.thumbnail)
+        
+        # Get all files in temp directory
+        temp_files = set()
+        for root, _, files in os.walk(temp_queue_images):
+            for file in files:
+                temp_files.add(os.path.join(root, file))
+        
+        # Find orphaned files (in temp but not in queue)
+        orphaned_files = temp_files - job_files
+        
+        # Delete orphaned files
+        for file in orphaned_files:
+            try:
+                os.remove(file)
+                print(f"Deleted orphaned file: {file}")
+            except Exception as e:
+                print(f"Error deleting file {file}: {str(e)}")
+    except Exception as e:
+        print(f"Error in cleanup_orphaned_files: {str(e)}")
+        traceback.print_exc()
+
+def reset_processing_jobs():
+    """Reset any processing to pending and move them to top of queue"""
+    job_queue[:] = [job for job in job_queue if job.status != "completed"]
+    try:
+        print("\n=== DEBUG: Reset Processing Jobs Called ===")
+        # Find all processing and just_added jobs
+        jobs_to_move = []
+        for job in job_queue:
+            if job.status in ("processing", "just_added"):
+                print(f"Found job {job.job_id} with status {job.status}")
+                jobs_to_move.append(job)
+        
+        # Remove these jobs from their current positions
+        for job in jobs_to_move:
+            job_queue.remove(job)
+            mark_job_pending(job)  # Use new function to mark as pending
+            print(f"Changed job {job.job_id} status to pending")
+        
+        # Add them back at the top in reverse order (so they maintain their relative order)
+        for job in reversed(jobs_to_move):
+            job_queue.insert(0, job)
+            print(f"Moved job {job.job_id} to top of queue")
+        
+        save_queue()
+        print(f"Queue saved with {len(jobs_to_move)} jobs moved to top")
+    except Exception as e:
+        print(f"Error in reset_processing_jobs: {str(e)}")
+        traceback.print_exc()
+
+
+# Add these calls at startup
+reset_processing_jobs()
+cleanup_orphaned_files()		
+
 
 block.launch(
     server_name=args.server,
