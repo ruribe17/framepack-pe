@@ -892,6 +892,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         if just_added_jobs:
             next_job = just_added_jobs[0]
             mark_job_processing(next_job)  # Use new function to mark as processing
+            queue_table_update, queue_display_update = mark_job_processing(next_job)
             update_queue_table()  # queue_table
             update_queue_display()  # queue_display
             save_queue()
@@ -941,6 +942,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 if job.job_id == job_id:
                     mark_job_processing(job)
                     save_queue()
+                    queue_table_update, queue_display_update = mark_job_processing(job)
                     break
             process_image = input_image
             process_prompt = prompt
@@ -965,9 +967,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         next_job = pending_jobs[0]
         mark_job_processing(next_job)  # Use new function to mark as processing
         save_queue()
-        update_queue_table()  # queue_table
-        update_queue_display()  # queue_display
-        save_queue()
+        queue_table_update, queue_display_update = mark_job_processing(next_job)  # Use new function to mark as processing
         job_id = next_job.job_id
         
         try:
@@ -1007,7 +1007,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         gr.update(interactive=False),  # start_button
         gr.update(interactive=True),   # end_button
         gr.update(interactive=True),   # queue_button (always enabled)
-        update_queue_display()         # queue_display
+        update_queue_table(),         # queue_table
+        update_queue_display()        # queue_display
     )
 
     # Process output queue
@@ -1024,7 +1025,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 gr.update(interactive=False),  # start_button
                 gr.update(interactive=True),   # end_button
                 gr.update(interactive=True),   # queue_button (always enabled)
-                update_queue_display()         # queue_display
+                update_queue_table(),         # queue_table
+                update_queue_display()        # queue_display
             )
 
         if flag == 'progress':
@@ -1037,19 +1039,20 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                 gr.update(interactive=False),  # start_button
                 gr.update(interactive=True),   # end_button
                 gr.update(interactive=True),   # queue_button (always enabled)
-                update_queue_display()         # queue_display
+                update_queue_table(),         # queue_table
+                update_queue_display()        # queue_display
             )
 
         if flag == 'end':
             # Find and mark all processing jobs as completed
-            #### delete mp4s
-            
             for job in job_queue:
                 if job.status == "processing":
-                    mark_job_completed(job)  # Use new function to mark as pending
+                    mark_job_completed(job) 
+                    clean_up_temp_mp4png(job_id, outputs_folder, keep_temp_png, keep_temp_mp4)
+                    queue_table_update, queue_display_update = mark_job_completed(job)  # Use new function to mark as pending
                     save_queue()
                     update_queue_table()  # queue_table
-                    update_queue_display()			# queue_display
+                    update_queue_display()          # queue_display
                     break
 
             # Then check if we should continue processing (only if end button wasn't clicked)
@@ -1069,7 +1072,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
                 if next_job:
                     # Update next job status to processing
-                    mark_job_processing(next_job)
+                    mark_job_processing(next_job)  # Use new function to mark as processing
+                    queue_table_update, queue_display_update = mark_job_processing(next_job)
                     save_queue()
                     update_queue_table()  # queue_table
                     update_queue_display()  # queue_display
@@ -1101,7 +1105,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                         gr.update(interactive=True),  # start_button
                         gr.update(interactive=False),  # end_button
                         gr.update(interactive=True),  # queue_button
-                        update_queue_display()  # queue_display
+                        update_queue_table(),         # queue_table
+                        update_queue_display()        # queue_display
                     )
                     break
             else:
@@ -1116,7 +1121,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
                     gr.update(interactive=True),  # start_button
                     gr.update(interactive=False),  # end_button
                     gr.update(interactive=True),  # queue_button
-                    update_queue_display()  # queue_display
+                    update_queue_table(),         # queue_table
+                    update_queue_display()        # queue_display
                 )
                 break
 
@@ -1142,8 +1148,7 @@ def end_process():
             if job.status == "processing":
                 mark_job_pending(job)  # Use new function to mark as pending
                 save_queue()
-                update_queue_table()  # queue_table
-                update_queue_display()  # queue_display
+                queue_table_update, queue_display_update = mark_job_pending(job)  # Use new function to mark as pending
                 jobs_changed += 1
         
         # If we found a processing job, move it to the top
@@ -1652,7 +1657,7 @@ with block:
     start_button.click(
         fn=process, 
         inputs=ips, 
-        outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button, queue_button, queue_display]
+        outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button, queue_button, queue_table, queue_display]
     )
     end_button.click(
         fn=end_process,
