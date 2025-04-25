@@ -141,7 +141,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         height, width = find_nearest_bucket(H, W, resolution=640)
         input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
 
-        Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
+        #Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
 
         input_image_pt = torch.from_numpy(input_image_np).float() / 127.5 - 1
         input_image_pt = input_image_pt.permute(2, 0, 1)[None, :, None]
@@ -193,6 +193,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             # use `latent_paddings = list(reversed(range(total_latent_sections)))` to compare
             latent_paddings = [3] + [2] * (total_latent_sections - 3) + [1, 0]
 
+        prev_output = None
+        
         for latent_padding in latent_paddings:
             is_last_section = latent_padding == 0
             latent_padding_size = latent_padding * latent_window_size
@@ -293,11 +295,21 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             if not high_vram:
                 unload_complete_models()
 
-            output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
-
+            output_filename = os.path.join(
+                outputs_folder,
+                f"{job_id}_{total_generated_latent_frames}.mp4"
+            )
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=mp4_crf)
 
             print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
+
+            if prev_output and os.path.exists(prev_output):
+                try:
+                    os.remove(prev_output)
+                except OSError:
+                    pass          # don’t crash if another process has it open
+
+            prev_output = output_filename    # remember for next iteration
 
             stream.output_queue.push(('file', output_filename))
 
