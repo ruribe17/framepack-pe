@@ -26,7 +26,7 @@ from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_pro
 from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
-
+from gradio import BrowserState
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
@@ -357,6 +357,8 @@ quick_prompts = [[x] for x in quick_prompts]
 css = make_progress_bar_css()
 block = gr.Blocks(css=css).queue()
 with block:
+    settings = BrowserState({}, storage_key="framepack_settings")
+
     gr.Markdown('# FramePack')
     with gr.Row():
         with gr.Column():
@@ -386,6 +388,40 @@ with block:
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger value causes slower speed.")
 
                 mp4_crf = gr.Slider(label="MP4 Compression", minimum=0, maximum=100, value=16, step=1, info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs. ")
+                
+                # Components whose values you want to remember:
+                persist_comps = {
+                    "seed":   seed,
+                    "length": total_second_length,
+                    "steps":  steps,
+                    "gs":     gs,
+                    "memory": gpu_memory_preservation,
+                    "teacache": use_teacache,
+                }
+
+                def _save(*vals):
+                    *vals, store = vals
+                    store.update({k: v for k, v in zip(persist_comps.keys(), vals)})
+                    return store
+
+                # Gradio ≥ 4.24
+                gr.on(
+                    [c.change for c in persist_comps.values()],
+                    fn=_save,
+                    inputs=[*persist_comps.values(), settings],
+                    outputs=[settings],
+                    preprocess=False,
+                )
+
+                def _restore(store):
+                    return [store.get(k, comp.value) for k, comp in persist_comps.items()]
+
+                block.load(
+                    _restore,
+                    inputs=settings,
+                    outputs=list(persist_comps.values()),
+                    queue=False,
+                )
 
         with gr.Column():
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
