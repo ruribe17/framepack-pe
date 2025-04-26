@@ -98,6 +98,7 @@ stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
+PREVIEW_STRIDE = 8          # show preview every 8 denoiser steps
 
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
@@ -223,6 +224,10 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 transformer.initialize_teacache(enable_teacache=False)
 
             def callback(d):
+                # Skip most steps to save VAE-decode and GUI overhead
+                if d["i"] % PREVIEW_STRIDE:
+                    return
+
                 preview = d['denoised']
                 preview = vae_decode_fake(preview)
 
