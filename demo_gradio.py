@@ -369,7 +369,11 @@ quick_prompts = [[x] for x in quick_prompts]
 css = make_progress_bar_css()
 block = gr.Blocks(css=css).queue()
 with block:
-    settings = BrowserState({}, storage_key="framepack_settings")
+    settings = gr.BrowserState(
+        {},
+        storage_key="framepack_settings",
+        secret="framepack_v1"
+    )
 
     gr.Markdown('# FramePack')
     with gr.Row():
