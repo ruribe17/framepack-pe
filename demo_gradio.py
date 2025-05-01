@@ -107,6 +107,11 @@ else:
     vae.to(gpu)
     transformer.to(gpu)
 
+def patched_video_is_playable(video_filepath):
+     return True
+
+gr.processing_utils.video_is_playable = patched_video_is_playable
+
 def quit_application():
     print("Save and Quit requested...")
     autosave_queue_on_exit(global_state_for_autosave)
@@ -137,12 +142,13 @@ def update_queue_df(queue_state):
     queue = queue_state.get("queue", [])
     data = []
     processing = queue_state.get("processing", False)
+    editing_task_id = queue_state.get("editing_task_id", None)
 
     for i, task in enumerate(queue):
         params = task['params']
         task_id = task['id']
         prompt_display = (params['prompt'][:77] + '...') if len(params['prompt']) > 80 else params['prompt']
-        prompt_title = params['prompt'].replace('"', '&quot;')
+        prompt_title = params['prompt'].replace('"', '"')
         prompt_cell = f'<span title="{prompt_title}">{prompt_display}</span>'
 
         img_uri = np_to_base64_uri(params['input_image'], format="jpeg")
@@ -152,14 +158,19 @@ def update_queue_df(queue_state):
             img_md = f'<img src="{img_uri}" alt="Input" style="max-width:{thumbnail_size}; max-height:{thumbnail_size}; display: block; margin: auto; object-fit: contain;" />'
 
         is_processing = processing and i == 0
+        is_editing = editing_task_id == task_id
+
         up_btn = "↑"
         down_btn = "↓"
         remove_btn = "✖"
+        edit_btn = "✎"
 
         task_status = task.get("status")
         status = "<?>"
         if is_processing:
             status = "⏳ Processing"
+        elif is_editing:
+            status = "✏️ Editing"
         elif task_status == "done":
             status = "✅ Done"
         elif task_status == "error":
@@ -178,7 +189,8 @@ def update_queue_df(queue_state):
             img_md,
             up_btn,
             down_btn,
-            remove_btn
+            remove_btn,
+            edit_btn
         ])
     return gr.DataFrame(value=data, visible=len(data) > 0)
 
@@ -254,20 +266,144 @@ def remove_task(state, selected_indices):
 
     return state, update_queue_df(queue_state)
 
-def handle_queue_action(state, evt: gr.SelectData):
-     if evt.index is None or evt.value != "↑" and evt.value != "↓" and evt.value != "✖":
-         return state, update_queue_df(get_queue_state(state))
+def handle_queue_action(state, evt: gr.SelectData, *ips):
+    (input_image_ui, prompt_ui, n_prompt_ui, seed_ui, total_second_length_ui,
+     latent_window_size_ui, steps_ui, cfg_ui, gs_ui, rs_ui,
+     gpu_memory_preservation_ui, use_teacache_ui, mp4_crf_ui) = ips
 
-     row_index, col_index = evt.index
-     button_clicked = evt.value
+    if evt.index is None or evt.value not in ["↑", "↓", "✖", "✎"]:
+         return [state, update_queue_df(get_queue_state(state))] + [gr.update()] * (len(ips) + 3)
 
-     if button_clicked == "↑":
-         return move_task(state, 'up', [[row_index, col_index]])
-     elif button_clicked == "↓":
-         return move_task(state, 'down', [[row_index, col_index]])
-     elif button_clicked == "✖":
-         return remove_task(state, [[row_index, col_index]])
-     return state, update_queue_df(get_queue_state(state))
+    row_index, col_index = evt.index
+    button_clicked = evt.value
+    queue_state = get_queue_state(state)
+    queue = queue_state["queue"]
+    processing = queue_state.get("processing", False)
+
+    outputs = [state, update_queue_df(queue_state)] + [gr.update()] * (len(ips) + 3)
+
+    if button_clicked == "↑":
+        if processing and row_index == 0:
+             gr.Warning("Cannot move the currently processing task.")
+             return outputs
+        new_state, new_df = move_task(state, 'up', [[row_index, col_index]])
+        outputs[0] = new_state
+        outputs[1] = new_df
+        return outputs
+    elif button_clicked == "↓":
+        if processing and row_index == 0:
+             gr.Warning("Cannot move the currently processing task.")
+             return outputs
+        if processing and row_index == 1:
+             gr.Warning("Cannot move a task below the currently processing task.")
+             return outputs
+        new_state, new_df = move_task(state, 'down', [[row_index, col_index]])
+        outputs[0] = new_state
+        outputs[1] = new_df
+        return outputs
+    elif button_clicked == "✖":
+        if processing and row_index == 0:
+             gr.Warning("Cannot remove the currently processing task.")
+             return outputs
+        new_state, new_df = remove_task(state, [[row_index, col_index]])
+        outputs[0] = new_state
+        outputs[1] = new_df
+        if queue_state.get("editing_task_id", None) == queue[row_index]['id']:
+             queue_state["editing_task_id"] = None
+             outputs[2 + len(ips)] = gr.update(value="Add Task to Queue")
+             outputs[2 + len(ips) + 1] = gr.update(visible=False)
+        return outputs
+    elif button_clicked == "✎":
+        if processing and row_index == 0:
+            gr.Warning("Cannot edit the currently processing task.")
+            return outputs
+
+        if 0 <= row_index < len(queue):
+             task_to_edit = queue[row_index]
+             task_id_to_edit = task_to_edit['id']
+             params_to_edit = task_to_edit['params']
+
+             queue_state["editing_task_id"] = task_id_to_edit
+             gr.Info(f"Editing Task {task_id_to_edit}. Make changes and click 'Update Task'.")
+
+             param_names = [
+                 'input_image', 'prompt', 'n_prompt', 'seed', 'total_second_length',
+                 'latent_window_size', 'steps', 'cfg', 'gs', 'rs',
+                 'gpu_memory_preservation', 'use_teacache', 'mp4_crf'
+             ]
+             ui_updates = [gr.update(value=params_to_edit.get(name)) for name in param_names]
+
+             return ([state, update_queue_df(queue_state)] +
+                     ui_updates +
+                     [gr.update(value="Update Task"),
+                      gr.update(visible=True),
+                      gr.update()
+                     ])
+        else:
+             gr.Warning("Invalid index for edit.")
+             return outputs
+
+    return outputs
+
+def add_or_update_task(state, *args):
+    queue_state = get_queue_state(state)
+    editing_task_id = queue_state.get("editing_task_id", None)
+
+    inputs = list(args)
+    input_image_np = inputs[0]
+    prompt = inputs[1]
+
+    if input_image_np is None:
+        gr.Warning("Input image is required!")
+        return state, update_queue_df(queue_state), gr.update(), gr.update(visible=editing_task_id is not None)
+
+    param_names = [
+        'input_image', 'prompt', 'n_prompt', 'seed', 'total_second_length',
+        'latent_window_size', 'steps', 'cfg', 'gs', 'rs',
+        'gpu_memory_preservation', 'use_teacache', 'mp4_crf'
+    ]
+    params_dict = dict(zip(param_names, inputs))
+
+    if editing_task_id is not None:
+        with queue_lock:
+            task_found = False
+            for task in queue_state["queue"]:
+                if task["id"] == editing_task_id:
+                    task["params"] = params_dict
+                    task["status"] = "pending"
+                    task_found = True
+                    break
+            if not task_found:
+                gr.Warning(f"Task {editing_task_id} not found for update. Adding as new task.")
+                editing_task_id = None
+                queue_state["editing_task_id"] = None
+            else:
+                gr.Info(f"Task {editing_task_id} updated.")
+                queue_state["editing_task_id"] = None
+                return state, update_queue_df(queue_state), gr.update(value="Add Task to Queue"), gr.update(visible=False)
+
+    queue = queue_state["queue"]
+    next_id = queue_state["next_id"]
+
+    task = {
+        "id": next_id,
+        "params": params_dict,
+        "status": "pending"
+    }
+
+    with queue_lock:
+        queue.append(task)
+        queue_state["next_id"] += 1
+
+    gr.Info(f"Task {next_id} added to queue.")
+    return state, update_queue_df(queue_state), gr.update(value="Add Task to Queue"), gr.update(visible=False)
+
+def cancel_edit_mode(state):
+    queue_state = get_queue_state(state)
+    if queue_state.get("editing_task_id") is not None:
+        gr.Info("Edit cancelled.")
+        queue_state["editing_task_id"] = None
+    return state, update_queue_df(queue_state), gr.update(value="Add Task to Queue"), gr.update(visible=False)
 
 def clear_queue(state):
     queue_state = get_queue_state(state)
@@ -903,7 +1039,11 @@ css = make_progress_bar_css() + """
 #queue_df th:nth-child(7), #queue_df td:nth-child(7) { width: 4%; cursor: pointer; }
 #queue_df th:nth-child(8), #queue_df td:nth-child(8) { width: 4%; cursor: pointer; }
 #queue_df th:nth-child(9), #queue_df td:nth-child(9) { width: 4%; cursor: pointer; }
-#queue_df td:nth-child(7):hover, #queue_df td:nth-child(8):hover, #queue_df td:nth-child(9):hover { background-color: #e0e0e0; }
+#queue_df th:nth-child(10), #queue_df td:nth-child(10) { width: 4%; cursor: pointer; }
+#queue_df td:nth-child(7):hover,
+#queue_df td:nth-child(8):hover,
+#queue_df td:nth-child(9):hover,
+#queue_df td:nth-child(10):hover { background-color: #e0e0e0; }
 """
 block = gr.Blocks(css=css).queue()
 
@@ -939,16 +1079,18 @@ with block:
 
             with gr.Row():
                 add_button = gr.Button(value="Add Task to Queue")
+                cancel_edit_button = gr.Button(value="Cancel Edit", visible=False, variant="secondary")
                 abort_button = gr.Button(value="Abort Current Task", interactive=False, variant="stop")
 
         with gr.Column(scale=2):
             gr.Markdown("## Queue")
             queue_df = gr.DataFrame(
-                 headers=["ID", "Status", "Prompt", "Length", "Steps", "Input", "", "", ""],
-                 datatype=["number", "str", "markdown", "str", "number", "markdown", "str", "str", "str"],
-                 col_count=(9, "fixed"),
+                 headers=["ID", "Status", "Prompt", "Length", "Steps", "Input", "", "", "", ""],
+                 datatype=["number", "str", "markdown", "str", "number", "markdown", "str", "str", "str", "str"],
+                 col_count=(10, "fixed"),
                  value=[], interactive=False,
-                 visible=False
+                 visible=False,
+                 elem_id="queue_df"
             )
 
             with gr.Row():
@@ -973,13 +1115,19 @@ with block:
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
 
     add_button.click(
-        fn=add_task_to_queue,
+        fn=add_or_update_task,
         inputs=[state] + ips,
-        outputs=[state, queue_df]
+        outputs=[state, queue_df, add_button, cancel_edit_button]
     ).then(
         fn=process_queue,
         inputs=[state],
         outputs=[state, queue_df, result_video, preview_image, progress_desc, progress_bar, add_button, abort_button]
+    )
+
+    cancel_edit_button.click(
+        fn=cancel_edit_mode,
+        inputs=[state],
+        outputs=[state, queue_df, add_button, cancel_edit_button]
     )
 
     quit_button.click(
@@ -1021,7 +1169,11 @@ with block:
 
     load_queue_btn.upload(fn=load_queue, inputs=[state, load_queue_btn], outputs=[state, queue_df])
 
-    queue_df.select(fn=handle_queue_action, inputs=[state], outputs=[state, queue_df])
+    queue_df.select(
+        fn=handle_queue_action,
+        inputs=[state] + ips,
+        outputs=[state, queue_df] + ips + [add_button, cancel_edit_button, result_video]
+    )
 
     block.load(
         fn=autoload_queue_on_start,
