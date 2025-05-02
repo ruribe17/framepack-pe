@@ -51,6 +51,13 @@ outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 queue_cache_dir = os.path.join(outputs_folder, "_queue_cache")
 os.makedirs(queue_cache_dir, exist_ok=True)
+SETTINGS_FILENAME = "settings.json"
+
+param_names = [
+    'input_image', 'prompt', 'n_prompt', 'seed', 'total_second_length',
+    'latent_window_size', 'steps', 'cfg', 'gs', 'rs',
+    'gpu_memory_preservation', 'use_teacache', 'mp4_crf', 'output_folder'
+]
 
 print(args)
 
@@ -112,24 +119,71 @@ def patched_video_is_playable(video_filepath):
 
 gr.processing_utils.video_is_playable = patched_video_is_playable
 
+def save_defaults(*args):
+    settings_to_save = dict(zip(param_names[1:], args))
+    try:
+        with open(SETTINGS_FILENAME, 'w', encoding='utf-8') as f:
+            json.dump(settings_to_save, f, indent=4)
+        gr.Info(f"Defaults saved to {SETTINGS_FILENAME}")
+    except Exception as e:
+        gr.Warning(f"Error saving defaults: {e}")
+        print(f"Error saving defaults: {e}")
+        traceback.print_exc()
+    return
+
+def load_defaults():
+    default_values = {
+        'prompt': '', 'n_prompt': '', 'seed': 31337, 'total_second_length': 5,
+        'latent_window_size': 9, 'steps': 25, 'cfg': 1.0, 'gs': 10.0, 'rs': 0.0,
+        'gpu_memory_preservation': 6, 'use_teacache': True, 'mp4_crf': 16, 'output_folder': './outputs/'
+    }
+    loaded_settings = {}
+    if os.path.exists(SETTINGS_FILENAME):
+        try:
+            with open(SETTINGS_FILENAME, 'r', encoding='utf-8') as f:
+                loaded_settings = json.load(f)
+            print(f"Loaded defaults from {SETTINGS_FILENAME}")
+        except Exception as e:
+            print(f"Error loading defaults from {SETTINGS_FILENAME}: {e}")
+            loaded_settings = {}
+
+    updates = []
+    for name in param_names[1:]:
+        value = loaded_settings.get(name, default_values.get(name))
+        updates.append(gr.update(value=value))
+
+    return updates
+
 def quit_application():
     print("Save and Quit requested...")
     autosave_queue_on_exit(global_state_for_autosave)
     import signal
     os.kill(os.getpid(), signal.SIGINT)
 
-def np_to_base64_uri(np_array, format="png"):
-    if np_array is None:
+def np_to_base64_uri(np_array_or_tuple, format="png"):
+    if np_array_or_tuple is None:
         return None
     try:
+        if isinstance(np_array_or_tuple, tuple) and len(np_array_or_tuple) > 0 and isinstance(np_array_or_tuple[0], np.ndarray):
+            np_array = np_array_or_tuple[0]
+        elif isinstance(np_array_or_tuple, np.ndarray):
+             np_array = np_array_or_tuple
+        else:
+             print(f"Warning: Unexpected type in np_to_base64_uri: {type(np_array_or_tuple)}")
+             return None
+
         pil_image = Image.fromarray(np_array.astype(np.uint8))
+        output_format = format.lower()
+        if output_format == "jpeg" and pil_image.mode == "RGBA":
+            pil_image = pil_image.convert("RGB")
+
         buffer = io.BytesIO()
-        pil_image.save(buffer, format=format)
+        pil_image.save(buffer, format=output_format)
         img_bytes = buffer.getvalue()
         encoded_string = base64.b64encode(img_bytes).decode("utf-8")
-        return f"data:image/{format.lower()};base64,{encoded_string}"
+        return f"data:image/{output_format};base64,{encoded_string}"
     except Exception as e:
-        print(f"Error converting NumPy array to base64: {e}")
+        print(f"Error converting NumPy array/tuple to base64: {e}")
         return None
 
 def get_queue_state(state_dict):
@@ -151,7 +205,7 @@ def update_queue_df(queue_state):
         prompt_title = params['prompt'].replace('"', '"')
         prompt_cell = f'<span title="{prompt_title}">{prompt_display}</span>'
 
-        img_uri = np_to_base64_uri(params['input_image'], format="jpeg")
+        img_uri = np_to_base64_uri(params['input_image'], format="png")
         thumbnail_size = "50px"
         img_md = ""
         if img_uri:
@@ -207,11 +261,6 @@ def add_task_to_queue(state, *args):
     queue = queue_state["queue"]
     next_id = queue_state["next_id"]
 
-    param_names = [
-        'input_image', 'prompt', 'n_prompt', 'seed', 'total_second_length',
-        'latent_window_size', 'steps', 'cfg', 'gs', 'rs',
-        'gpu_memory_preservation', 'use_teacache', 'mp4_crf'
-    ]
     params_dict = dict(zip(param_names, inputs))
 
     task = {
@@ -247,8 +296,9 @@ def move_task(state, direction, selected_indices):
     return state, update_queue_df(queue_state)
 
 def remove_task(state, selected_indices):
+    removed_task_id = None
     if not selected_indices:
-         return state, update_queue_df(get_queue_state(state))
+         return state, update_queue_df(get_queue_state(state)), removed_task_id
 
     idx = selected_indices[0]
     if isinstance(idx, list): idx = idx[0]
@@ -260,16 +310,17 @@ def remove_task(state, selected_indices):
     with queue_lock:
         if 0 <= idx < len(queue):
             removed_task = queue.pop(idx)
-            gr.Info(f"Removed task {removed_task['id']} (Prompt: {removed_task['params']['prompt'][:30]}...).")
+            removed_task_id = removed_task['id']
+            gr.Info(f"Removed task {removed_task_id} (Prompt: {removed_task['params']['prompt'][:30]}...).")
         else:
             gr.Warning("Invalid index selected for removal.")
 
-    return state, update_queue_df(queue_state)
+    return state, update_queue_df(queue_state), removed_task_id
 
 def handle_queue_action(state, evt: gr.SelectData, *ips):
     (input_image_ui, prompt_ui, n_prompt_ui, seed_ui, total_second_length_ui,
      latent_window_size_ui, steps_ui, cfg_ui, gs_ui, rs_ui,
-     gpu_memory_preservation_ui, use_teacache_ui, mp4_crf_ui) = ips
+     gpu_memory_preservation_ui, use_teacache_ui, mp4_crf_ui, output_folder_ui) = ips
 
     if evt.index is None or evt.value not in ["↑", "↓", "✖", "✎"]:
          return [state, update_queue_df(get_queue_state(state))] + [gr.update()] * (len(ips) + 3)
@@ -305,10 +356,11 @@ def handle_queue_action(state, evt: gr.SelectData, *ips):
         if processing and row_index == 0:
              gr.Warning("Cannot remove the currently processing task.")
              return outputs
-        new_state, new_df = remove_task(state, [[row_index, col_index]])
+        new_state, new_df, removed_task_id = remove_task(state, [[row_index, col_index]])
         outputs[0] = new_state
         outputs[1] = new_df
-        if queue_state.get("editing_task_id", None) == queue[row_index]['id']:
+        if removed_task_id is not None and queue_state.get("editing_task_id", None) == removed_task_id:
+             gr.Info(f"Edit mode cancelled as Task {removed_task_id} was removed.")
              queue_state["editing_task_id"] = None
              outputs[2 + len(ips)] = gr.update(value="Add Task to Queue")
              outputs[2 + len(ips) + 1] = gr.update(visible=False)
@@ -326,19 +378,21 @@ def handle_queue_action(state, evt: gr.SelectData, *ips):
              queue_state["editing_task_id"] = task_id_to_edit
              gr.Info(f"Editing Task {task_id_to_edit}. Make changes and click 'Update Task'.")
 
-             param_names = [
-                 'input_image', 'prompt', 'n_prompt', 'seed', 'total_second_length',
-                 'latent_window_size', 'steps', 'cfg', 'gs', 'rs',
-                 'gpu_memory_preservation', 'use_teacache', 'mp4_crf'
-             ]
-             ui_updates = [gr.update(value=params_to_edit.get(name)) for name in param_names]
+             ui_updates = []
+             for i, name in enumerate(param_names):
+                 value_to_set = params_to_edit.get(name)
+                 if i == 0:
+                      if isinstance(value_to_set, np.ndarray):
+                           gallery_value = [(value_to_set, None)]
+                           ui_updates.append(gr.update(value=gallery_value))
+                      else:
+                           ui_updates.append(gr.update(value=None))
+                 else:
+                      ui_updates.append(gr.update(value=value_to_set))
 
              return ([state, update_queue_df(queue_state)] +
                      ui_updates +
-                     [gr.update(value="Update Task"),
-                      gr.update(visible=True),
-                      gr.update()
-                     ])
+                     [gr.update(value="Update Task"), gr.update(visible=True), gr.update()])
         else:
              gr.Warning("Invalid index for edit.")
              return outputs
@@ -350,53 +404,72 @@ def add_or_update_task(state, *args):
     editing_task_id = queue_state.get("editing_task_id", None)
 
     inputs = list(args)
-    input_image_np = inputs[0]
+    input_images_gallery_output = inputs[0]
     prompt = inputs[1]
+    output_folder = inputs[-1]
 
-    if input_image_np is None:
-        gr.Warning("Input image is required!")
-        return state, update_queue_df(queue_state), gr.update(), gr.update(visible=editing_task_id is not None)
+    if not input_images_gallery_output:
+        gr.Warning("Input image(s) are required!")
+        return state, update_queue_df(queue_state), gr.update(value="Add Task to Queue" if editing_task_id is None else "Update Task"), gr.update(visible=editing_task_id is not None)
 
-    param_names = [
-        'input_image', 'prompt', 'n_prompt', 'seed', 'total_second_length',
-        'latent_window_size', 'steps', 'cfg', 'gs', 'rs',
-        'gpu_memory_preservation', 'use_teacache', 'mp4_crf'
-    ]
-    params_dict = dict(zip(param_names, inputs))
+    if not isinstance(input_images_gallery_output, list):
+         input_images_gallery_output = [input_images_gallery_output]
+
+    tasks_added_count = 0
+    first_new_task_id = -1
+
+    base_params_dict = dict(zip(param_names[1:], inputs[1:]))
 
     if editing_task_id is not None:
+        if len(input_images_gallery_output) > 1:
+            gr.Warning("Cannot update a task with multiple images from Gallery. Please cancel edit and add as new tasks.")
+            return state, update_queue_df(queue_state), gr.update(value="Update Task"), gr.update(visible=True)
+
+        img_tuple = input_images_gallery_output[0]
+        if not isinstance(img_tuple, tuple) or not isinstance(img_tuple[0], np.ndarray):
+             gr.Warning("Invalid image format received during update.")
+             return state, update_queue_df(queue_state), gr.update(value="Update Task"), gr.update(visible=True)
+        img_np_for_update = img_tuple[0]
+
         with queue_lock:
             task_found = False
             for task in queue_state["queue"]:
                 if task["id"] == editing_task_id:
-                    task["params"] = params_dict
+                    task["params"] = {'input_image': img_np_for_update, **base_params_dict}
                     task["status"] = "pending"
                     task_found = True
                     break
             if not task_found:
-                gr.Warning(f"Task {editing_task_id} not found for update. Adding as new task.")
-                editing_task_id = None
-                queue_state["editing_task_id"] = None
+                gr.Warning(f"Task {editing_task_id} not found for update. Edit cancelled.")
             else:
                 gr.Info(f"Task {editing_task_id} updated.")
-                queue_state["editing_task_id"] = None
-                return state, update_queue_df(queue_state), gr.update(value="Add Task to Queue"), gr.update(visible=False)
+            queue_state["editing_task_id"] = None
+            return state, update_queue_df(queue_state), gr.update(value="Add Task to Queue"), gr.update(visible=False)
+    else:
+        with queue_lock:
+            for img_tuple in input_images_gallery_output:
+                if not isinstance(img_tuple, tuple) or not isinstance(img_tuple[0], np.ndarray):
+                    gr.Warning("One of the provided image inputs was invalid. Skipping.")
+                    continue
+                img_np = img_tuple[0]
 
-    queue = queue_state["queue"]
-    next_id = queue_state["next_id"]
+                next_id = queue_state["next_id"]
+                if first_new_task_id == -1: first_new_task_id = next_id
 
-    task = {
-        "id": next_id,
-        "params": params_dict,
-        "status": "pending"
-    }
+                task = {
+                    "id": next_id,
+                    "params": {'input_image': img_np, **base_params_dict},
+                    "status": "pending"
+                }
+                queue_state["queue"].append(task)
+                queue_state["next_id"] += 1
+                tasks_added_count += 1
 
-    with queue_lock:
-        queue.append(task)
-        queue_state["next_id"] += 1
-
-    gr.Info(f"Task {next_id} added to queue.")
-    return state, update_queue_df(queue_state), gr.update(value="Add Task to Queue"), gr.update(visible=False)
+        if tasks_added_count > 0:
+             gr.Info(f"Added {tasks_added_count} task(s) to queue (starting ID: {first_new_task_id}).")
+        else:
+             gr.Warning("No valid tasks were added.")
+        return state, update_queue_df(queue_state), gr.update(value="Add Task to Queue"), gr.update(visible=False)
 
 def cancel_edit_mode(state):
     queue_state = get_queue_state(state)
@@ -671,7 +744,10 @@ def autoload_queue_on_start(state):
     return state, df_update
 
 @torch.no_grad()
-def worker(task_id, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, output_queue_ref):
+def worker(task_id, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, output_folder, output_queue_ref):
+
+    current_output_folder = output_folder if output_folder else './outputs/'
+    os.makedirs(current_output_folder, exist_ok=True)
 
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
@@ -710,6 +786,23 @@ def worker(task_id, input_image, prompt, n_prompt, seed, total_second_length, la
         output_queue_ref.push(('progress', (task_id, None, '', make_progress_bar_html(0, 'Image processing ...'))))
 
         H, W, C = input_image.shape
+        height, width = find_nearest_bucket(H, W, resolution=640)
+        input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
+
+        input_image_pt = torch.from_numpy(input_image_np).float() / 127.5 - 1
+        input_image_pt = input_image_pt.permute(2, 0, 1)[None, :, None]
+
+        output_queue_ref.push(('progress', (task_id, None, '', make_progress_bar_html(0, 'Image processing ...'))))
+
+        if input_image.shape[-1] == 4:
+            print(f"Task {task_id}: Converting input image from RGBA to RGB.")
+            input_image = Image.fromarray(input_image).convert("RGB")
+            input_image = np.array(input_image)
+
+        H, W, C = input_image.shape
+        if C != 3:
+             raise ValueError(f"Task {task_id}: Input image must have 3 channels (RGB), but found {C} after potential conversion.")
+
         height, width = find_nearest_bucket(H, W, resolution=640)
         input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
 
@@ -859,7 +952,7 @@ def worker(task_id, input_image, prompt, n_prompt, seed, total_second_length, la
             if not high_vram:
                 unload_complete_models()
 
-            output_filename = os.path.join(outputs_folder, f'{job_id}_progress_{total_generated_latent_frames}.mp4')
+            output_filename = os.path.join(current_output_folder, f'{job_id}_progress_{total_generated_latent_frames}.mp4')
 
             save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=mp4_crf)
             final_output_filename = output_filename
@@ -883,6 +976,8 @@ def worker(task_id, input_image, prompt, n_prompt, seed, total_second_length, la
             unload_complete_models(
                 text_encoder, text_encoder_2, image_encoder, vae, transformer
             )
+        if final_output_filename and not os.path.dirname(final_output_filename) == os.path.abspath(current_output_folder):
+             final_output_filename = os.path.join(current_output_folder, os.path.basename(final_output_filename))
         output_queue_ref.push(('end', (task_id, success, final_output_filename)))
 
 
@@ -1056,7 +1151,7 @@ with block:
     gr.Markdown('# FramePack')
     with gr.Row():
         with gr.Column(scale=1):
-            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
+            input_image = gr.Gallery(type="numpy", label="Image(s)", height=320)
             prompt = gr.Textbox(label="Prompt", value='')
             example_quick_prompts = gr.Dataset(samples=[[x] for x in [
                 'The girl dances gracefully, with clear movements, full of charm.',
@@ -1076,6 +1171,8 @@ with block:
                 rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False) # Should not change
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger value causes slower speed.")
                 mp4_crf = gr.Slider(label="MP4 Compression", minimum=0, maximum=100, value=16, step=1, info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs. ")
+                output_folder_ui = gr.Textbox(label="Output Folder", value="./outputs/", info="Folder where videos will be saved.")
+                save_defaults_btn = gr.Button(value="Save Defaults", variant="secondary")
 
             with gr.Row():
                 add_button = gr.Button(value="Add Task to Queue")
@@ -1112,7 +1209,8 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
-    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
+    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, output_folder_ui]
+    default_settings_components = ips[1:]
 
     add_button.click(
         fn=add_or_update_task,
@@ -1169,6 +1267,12 @@ with block:
 
     load_queue_btn.upload(fn=load_queue, inputs=[state, load_queue_btn], outputs=[state, queue_df])
 
+    save_defaults_btn.click(
+        fn=save_defaults,
+        inputs=default_settings_components,
+        outputs=[]
+    )
+
     queue_df.select(
         fn=handle_queue_action,
         inputs=[state] + ips,
@@ -1176,6 +1280,10 @@ with block:
     )
 
     block.load(
+        fn=load_defaults,
+        inputs=[],
+        outputs=default_settings_components
+    ).then(
         fn=autoload_queue_on_start,
         inputs=[state],
         outputs=[state, queue_df]
