@@ -99,7 +99,7 @@ Connect to the gradio demo with a web browser on http://localhost:7860
 
 If the following error occurs when run: `docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]].`
 
-NVIDIA Container Toolkit needs to be installed and the docker service restarted.  
+NVIDIA Container Toolkit needs to be installed and the docker service restarted.
 
 # GUI
 
