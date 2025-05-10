@@ -97,6 +97,10 @@ docker run -p 7860:7860 --gpus all -v $(pwd):/app  --name frame-pack-container -
 
 Connect to the gradio demo with a web browser on http://localhost:7860
 
+If the following error occurs when run: `docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]].`
+
+NVIDIA Container Toolkit needs to be installed and the docker service restarted.  
+
 # GUI
 
 ![ui](https://github.com/user-attachments/assets/8c5cdbb1-b80c-4b7e-ac27-83834ac24cc4)
