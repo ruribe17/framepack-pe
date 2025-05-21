@@ -55,6 +55,25 @@ def sample_hunyuan(
 ):
     device = device or transformer.device
 
+    # Determine dtype based on GPU capability
+    if torch.cuda.is_available():
+        major, _ = torch.cuda.get_device_capability(device)
+        if major < 8:
+            dtype = torch.float32  # Override to float32 for older GPUs
+        # If major >= 8, the dtype passed as argument (or default torch.bfloat16) is used.
+        # No specific 'else' needed here because 'dtype' already holds the argument or default.
+    else:
+        # Non-CUDA case: use passed dtype if available, otherwise default to float32
+        # This part handles if dtype was explicitly passed to the function.
+        # If 'dtype' is not in locals() or is None (which shouldn't happen due to default arg),
+        # it implies we should decide a dtype.
+        # However, 'dtype' will always be in locals due to the function signature's default.
+        # So, if not CUDA, and dtype is still its default (torch.bfloat16), change to float32.
+        # If a user explicitly passed torch.float32, it's fine.
+        # If a user explicitly passed torch.bfloat16 and it's not CUDA, change to float32.
+        if dtype == torch.bfloat16: # Default or explicitly passed bfloat16
+            dtype = torch.float32
+
     if batch_size is None:
         batch_size = int(prompt_embeds.shape[0])
 
