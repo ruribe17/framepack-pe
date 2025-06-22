@@ -182,7 +182,6 @@ cython_debug/
 docs/
 saves/
 tmp/
-outputs_svc/
 demo_gradio_svc.py
 .venv_goan/
 .vs/
