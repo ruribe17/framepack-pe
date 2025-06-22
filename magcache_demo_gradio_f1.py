@@ -173,6 +173,9 @@ def magcache_framepack_calibration(
         print("cos_dis")
         print(self.cos_dis)
         self.cnt = 0
+        self.norm_ratio = []
+        self.norm_std = []
+        self.cos_dis = []
             
     hidden_states = self.gradient_checkpointing_method(self.norm_out, hidden_states, temb)
 
