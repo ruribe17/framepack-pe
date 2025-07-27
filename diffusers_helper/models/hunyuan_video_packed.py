@@ -31,31 +31,13 @@ if torch.backends.cuda.cudnn_sdp_enabled():
 
 print("Currently enabled native sdp backends:", enabled_backends)
 
-try:
-    # raise NotImplementedError
-    from xformers.ops import memory_efficient_attention as xformers_attn_func
-    print('Xformers is installed!')
-except:
-    print('Xformers is not installed!')
-    xformers_attn_func = None
-
-try:
-    # raise NotImplementedError
-    from flash_attn import flash_attn_varlen_func, flash_attn_func
-    print('Flash Attn is installed!')
-except:
-    print('Flash Attn is not installed!')
-    flash_attn_varlen_func = None
-    flash_attn_func = None
-
-try:
-    # raise NotImplementedError
-    from sageattention import sageattn_varlen, sageattn
-    print('Sage Attn is installed!')
-except:
-    print('Sage Attn is not installed!')
-    sageattn_varlen = None
-    sageattn = None
+# Forzar uso de SDP (scaled_dot_product_attention) en CPU
+print("Enforcing CPU-only attention: disabling xformers, flash-attn, sage-attention")
+xformers_attn_func = None
+flash_attn_varlen_func = None
+flash_attn_func = None
+sageattn_varlen = None
+sageattn = None
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
