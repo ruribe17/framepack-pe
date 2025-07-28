@@ -53,12 +53,12 @@ def sample_hunyuan(
         callback=None,
         **kwargs,
 ):
-    device = device or transformer.device
+    device = device or "cpu"
 
     if batch_size is None:
         batch_size = int(prompt_embeds.shape[0])
 
-    latents = torch.randn((batch_size, 16, (frames + 3) // 4, height // 8, width // 8), generator=generator, device=generator.device).to(device=device, dtype=torch.float32)
+    latents = torch.randn((batch_size, 16, (frames + 3) // 4, height // 8, width // 8), generator=generator, device=generator.device).to(device="cpu", dtype=torch.float32)
 
     B, C, T, H, W = latents.shape
     seq_length = T * H * W // 4
