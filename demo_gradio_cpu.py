@@ -54,20 +54,37 @@ def patch_hunyuan_causal_conv3d_for_cpu():
     original_forward = HunyuanVideoCausalConv3d.forward
 
     def cpu_compatible_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        # Guardar el dtype original (probablemente torch.float16)
+        # Guardar el dtype original de entrada (normalmente torch.float16)
+        print(f"[DEBUG] Conv input dtype: {hidden_states.dtype} | device: {hidden_states.device}")
+        print(f"[DEBUG] Weight dtype: {self.conv.weight.dtype} | Bias dtype: {self.conv.bias.dtype if self.conv.bias is not None else 'None'}")
+       
         input_dtype = hidden_states.dtype
 
-        # Convertir a float32 para operaciones críticas en CPU
-        hidden_states = hidden_states.to(torch.float32)
+        # 1. Convertir entrada a FP32 para cómputo
+        if hidden_states.dtype != torch.float32:
+           print(f"[DEBUG] Converting input to float32 for computation")
+           hidden_states = hidden_states.to(torch.float32)
 
-        # Aplicar padding con modo 'replicate' → ahora seguro en float32
-        # Nota: self.time_causal_padding ya está definido (e.g., (k//2, k//2, k//2, k//2, k-1, 0))
+        # 2. Guardar y convertir temporalmente los parámetros del conv a FP32
+        original_weight = self.conv.weight.data
+        original_bias = self.conv.bias.data if self.conv.bias is not None else None
+
+        # Convertir parámetros a FP32 para operación
+        self.conv.weight.data = self.conv.weight.data.to(torch.float32)
+        if self.conv.bias is not None:
+           self.conv.bias.data = self.conv.bias.data.to(torch.float32)
+
+        # 3. Aplicar padding y convolución en FP32
         hidden_states = F.pad(hidden_states, self.time_causal_padding, mode=self.pad_mode)
+        hidden_states = self.conv(hidden_states)  # Ahora ambos, input y params, son FP32
 
-        # Aplicar convolución
-        hidden_states = self.conv(hidden_states)
+        # 4. Restaurar parámetros a FP16 (almacenamiento eficiente)
+        self.conv.weight.data = original_weight  # Volver a FP16
+        if self.conv.bias is not None:
+           self.conv.bias.data = original_bias  # Volver a FP16
 
-        # Devolver al tipo original (float16)
+        # 5. Convertir salida al dtype original (FP16)
+        print(f"[DEBUG] Restored weights to {original_weight.dtype}")
         return hidden_states.to(input_dtype)
 
     # Reemplazar el método forward
